@@ -1,5 +1,4 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { Readable } from "node:stream";
 import { createServer } from "node:http";
@@ -26,10 +25,12 @@ createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", "http://localhost");
     if (url.pathname.startsWith("/sub2/")) {
+      if (handlePreflight(req, res)) return;
       await proxy(req, res, sub2Target, url.pathname.replace(/^\/sub2/, "") + url.search);
       return;
     }
     if (url.pathname.startsWith("/grok-media/")) {
+      if (handlePreflight(req, res)) return;
       await proxy(req, res, grokTarget, url.pathname.replace(/^\/grok-media/, "") + url.search);
       return;
     }
@@ -62,7 +63,7 @@ async function proxy(req, res, target, path) {
   response.headers.forEach((value, key) => {
     if (!isHopByHopHeader(key)) responseHeaders[key] = value;
   });
-  responseHeaders["access-control-allow-origin"] = "*";
+  Object.assign(responseHeaders, corsHeaders());
 
   res.writeHead(response.status, responseHeaders);
   if (!response.body) {
@@ -70,6 +71,22 @@ async function proxy(req, res, target, path) {
     return;
   }
   Readable.fromWeb(response.body).pipe(res);
+}
+
+function handlePreflight(req, res) {
+  if (req.method !== "OPTIONS") return false;
+  res.writeHead(204, corsHeaders());
+  res.end();
+  return true;
+}
+
+function corsHeaders() {
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+    "access-control-allow-headers": "authorization,content-type,x-api-key",
+    "access-control-max-age": "86400"
+  };
 }
 
 async function serveStatic(pathname, res) {

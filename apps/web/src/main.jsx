@@ -51,9 +51,9 @@ function App() {
   const [referenceImage, setReferenceImage] = useState(null);
   const fileRef = useRef(null);
 
-  const apiBase = useMemo(() => normalizeBaseUrl(settings.baseUrl), [settings.baseUrl]);
+  const apiBase = useMemo(() => runtimeApiBase(settings.baseUrl), [settings.baseUrl]);
   const mediaBase = useMemo(
-    () => normalizeBaseUrl(settings.mediaBaseUrl || settings.baseUrl),
+    () => runtimeMediaBase(settings.mediaBaseUrl || settings.baseUrl),
     [settings.mediaBaseUrl, settings.baseUrl]
   );
   const imageModels = useMemo(
@@ -491,6 +491,26 @@ function normalizeBaseUrl(value) {
   const raw = String(value || "").trim().replace(/\/+$/, "");
   if (!raw) return "";
   return raw.replace(/\/v1$/i, "");
+}
+
+function runtimeApiBase(value) {
+  const normalized = normalizeBaseUrl(value);
+  if (isKnownPublicHost(normalized, ["api.sky423.cn"])) return "/sub2";
+  return normalized;
+}
+
+function runtimeMediaBase(value) {
+  const normalized = normalizeBaseUrl(value);
+  if (isKnownPublicHost(normalized, ["grok.sky423.cn"])) return "/grok-media";
+  return normalized;
+}
+
+function isKnownPublicHost(value, hosts) {
+  try {
+    return hosts.includes(new URL(value).hostname);
+  } catch {
+    return false;
+  }
 }
 
 function joinUrl(base, path) {
