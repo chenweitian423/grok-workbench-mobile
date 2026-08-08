@@ -1,0 +1,72 @@
+name: Build Unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ios-unsigned-ipa:
+    name: Build unsigned IPA
+    runs-on: macos-latest
+
+    defaults:
+      run:
+        working-directory: apps/mobile
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prebuild iOS project
+        run: npx expo prebuild --platform ios --non-interactive --clean
+
+      - name: Install CocoaPods
+        run: pod install --project-directory=ios
+
+      - name: Build unsigned iOS app
+        run: |
+          set -euo pipefail
+          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1)"
+          SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" | awk '/Schemes:/ {flag=1; next} flag && NF {print $1; exit}')"
+          echo "Workspace: $WORKSPACE"
+          echo "Scheme: $SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/ios-derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/ios-derived/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "No .app found"
+            exit 1
+          fi
+          rm -rf dist/Payload
+          mkdir -p dist/Payload
+          cp -R "$APP_PATH" dist/Payload/
+          cd dist
+          zip -qry GrokWorkbench-unsigned.ipa Payload
+          ls -lh GrokWorkbench-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grok-workbench-unsigned-ipa
+          path: apps/mobile/dist/GrokWorkbench-unsigned.ipa
