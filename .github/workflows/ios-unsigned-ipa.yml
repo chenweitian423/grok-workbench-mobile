@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1)"
-          SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" | awk '/Schemes:/ {flag=1; next} flag && NF {print $1; exit}')"
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
           echo "Workspace: $WORKSPACE"
           echo "Scheme: $SCHEME"
           xcodebuild \
