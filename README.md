@@ -37,3 +37,7 @@ npm run build:ios:ipa
 
 Android APK uses the `preview` profile. iOS IPA requires an Apple developer
 account and EAS credentials.
+
+For self-signing/sideloading, use the GitHub Actions workflow
+`Build Unsigned iOS IPA`. It produces `GrokWorkbench-unsigned.ipa`, which must
+be re-signed before installing on a physical iPhone.

@@ -2,6 +2,7 @@
   "expo": {
     "name": "Grok Workbench",
     "slug": "grok-workbench-mobile",
+    "icon": "./assets/icon.png",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -25,7 +26,8 @@
         "INTERNET"
       ],
       "adaptiveIcon": {
-        "backgroundColor": "#f7f7f4"
+        "backgroundColor": "#ffffff",
+        "foregroundImage": "./assets/icon.png"
       }
     },
     "extra": {
