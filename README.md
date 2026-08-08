@@ -2,7 +2,7 @@
 
 iOS/Android client, directly connected to the existing Grok2API server:
 
-- Default server: `http://192.168.123.195:38695`
+- Default server: `https://grok.sky423.cn:18888`
 - Direct calls: `/healthz`, `/v1/models`, `/v1/images/generations`, `/v1/images/edits`
 - No custom backend/proxy server
 - Video is intentionally skipped for now

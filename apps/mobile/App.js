@@ -20,9 +20,9 @@ import {
   View
 } from "react-native";
 
-const DEFAULT_BASE_URL = process.env.EXPO_PUBLIC_GROK2API_BASE_URL || "http://192.168.123.195:38695";
+const DEFAULT_BASE_URL = process.env.EXPO_PUBLIC_GROK2API_BASE_URL || "https://grok.sky423.cn:18888";
 const DEFAULT_API_KEY = process.env.EXPO_PUBLIC_GROK2API_KEY || "";
-const DEFAULT_MEDIA_BASE_URL = process.env.EXPO_PUBLIC_GROK2API_MEDIA_BASE_URL || "http://192.168.123.195:38695";
+const DEFAULT_MEDIA_BASE_URL = process.env.EXPO_PUBLIC_GROK2API_MEDIA_BASE_URL || "https://grok.sky423.cn:18888";
 const DEFAULT_CHAT_MODELS = ["grok-4.5", "grok-4", "grok-3", "grok-3-mini", "grok-composer-2.5-fast"];
 const DEFAULT_IMAGE_MODELS = ["grok-imagine-image"];
 const aspectRatios = ["1:1", "4:3", "3:4", "16:9", "9:16"];
@@ -70,8 +70,8 @@ export default function App() {
     const stored = await AsyncStorage.getItem("grok-workbench-settings");
     if (stored) {
         const value = JSON.parse(stored);
-        if (value.baseUrl) setBaseUrl(value.baseUrl);
-        if (value.mediaBaseUrl) setMediaBaseUrl(value.mediaBaseUrl);
+        if (value.baseUrl) setBaseUrl(migrateGrokBaseUrl(value.baseUrl));
+        if (value.mediaBaseUrl) setMediaBaseUrl(migrateGrokBaseUrl(value.mediaBaseUrl));
         if (value.apiKey) setApiKey(value.apiKey);
     }
   }
@@ -291,9 +291,9 @@ export default function App() {
 function Settings({ baseUrl, setBaseUrl, mediaBaseUrl, setMediaBaseUrl, apiKey, setApiKey, refresh, saveSettings, saved }) {
   return <View style={styles.panel}>
     <Text style={styles.label}>API 地址</Text>
-    <TextInput value={baseUrl} onChangeText={setBaseUrl} autoCapitalize="none" autoCorrect={false} placeholder="https://api.sky423.cn:18888 或 http://192.168.123.195:38695" placeholderTextColor="#999" style={styles.input} />
+    <TextInput value={baseUrl} onChangeText={setBaseUrl} autoCapitalize="none" autoCorrect={false} placeholder="https://grok.sky423.cn:18888" placeholderTextColor="#999" style={styles.input} />
     <Text style={styles.label}>图片媒体地址</Text>
-    <TextInput value={mediaBaseUrl} onChangeText={setMediaBaseUrl} autoCapitalize="none" autoCorrect={false} placeholder="Sub2 转发时填 Grok2API 地址，如 http://192.168.123.195:38695" placeholderTextColor="#999" style={styles.input} />
+    <TextInput value={mediaBaseUrl} onChangeText={setMediaBaseUrl} autoCapitalize="none" autoCorrect={false} placeholder="https://grok.sky423.cn:18888" placeholderTextColor="#999" style={styles.input} />
     <Text style={styles.label}>API Key</Text>
     <TextInput value={apiKey} onChangeText={setApiKey} autoCapitalize="none" autoCorrect={false} secureTextEntry placeholder="sk-... / g2a_..." placeholderTextColor="#999" style={styles.input} />
     <View style={styles.settingsActions}>
@@ -359,6 +359,15 @@ function Segment({ values, value, onChange, suffix = "" }) {
 
 function normalizeBaseUrl(value) {
   return String(value || DEFAULT_BASE_URL).replace(/\/+$/, "").replace(/\/v1$/i, "");
+}
+
+function migrateGrokBaseUrl(value) {
+  const normalized = normalizeBaseUrl(value);
+  try {
+    const host = new URL(normalized).hostname;
+    if (host === "api.sky423.cn") return DEFAULT_BASE_URL;
+  } catch {}
+  return normalized;
 }
 
 function mergeModels(primary, fallback) {

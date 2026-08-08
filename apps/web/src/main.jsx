@@ -18,8 +18,8 @@ import "./styles.css";
 const STORAGE_KEY = "grok-workbench-web-settings";
 
 const DEFAULTS = {
-  baseUrl: "/sub2",
-  mediaBaseUrl: "/grok-media",
+  baseUrl: "https://grok.sky423.cn:18888",
+  mediaBaseUrl: "https://grok.sky423.cn:18888",
   apiKey: "",
   imageModel: "grok-imagine-image",
   chatModel: "grok-4.5"
@@ -265,7 +265,7 @@ function App() {
           <i />
           {status}
         </span>
-        <span className="server-text">直连现有 sub2api / grok2api</span>
+        <span className="server-text">直连现有 grok2api</span>
       </section>
 
       {settingsOpen && (
@@ -481,10 +481,18 @@ function Empty({ icon, title, text }) {
 
 function readSettings() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    return migrateSettings(JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"));
   } catch {
     return {};
   }
+}
+
+function migrateSettings(value) {
+  return {
+    ...value,
+    baseUrl: value.baseUrl ? migrateGrokBaseUrl(value.baseUrl) : value.baseUrl,
+    mediaBaseUrl: value.mediaBaseUrl ? migrateGrokBaseUrl(value.mediaBaseUrl) : value.mediaBaseUrl
+  };
 }
 
 function normalizeBaseUrl(value) {
@@ -495,7 +503,7 @@ function normalizeBaseUrl(value) {
 
 function runtimeApiBase(value) {
   const normalized = normalizeBaseUrl(value);
-  if (isKnownPublicHost(normalized, ["api.sky423.cn"])) return "/sub2";
+  if (isKnownPublicHost(normalized, ["grok.sky423.cn"])) return "/grok-media";
   return normalized;
 }
 
@@ -511,6 +519,12 @@ function isKnownPublicHost(value, hosts) {
   } catch {
     return false;
   }
+}
+
+function migrateGrokBaseUrl(value) {
+  const normalized = normalizeBaseUrl(value);
+  if (isKnownPublicHost(normalized, ["api.sky423.cn"])) return DEFAULTS.baseUrl;
+  return normalized;
 }
 
 function joinUrl(base, path) {
