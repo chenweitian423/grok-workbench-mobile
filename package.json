@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "start": "npm --prefix apps/mobile start",
+    "webapp:build": "npm --prefix apps/web run build",
     "android": "npm --prefix apps/mobile run android",
     "ios": "npm --prefix apps/mobile run ios",
     "web": "npm --prefix apps/mobile run web",

@@ -1,0 +1,18 @@
+services:
+  grok-workbench-web:
+    image: node:22-alpine
+    container_name: grok-workbench-web
+    working_dir: /app
+    restart: unless-stopped
+    command: ["node", "server.mjs"]
+    ports:
+      - "39180:80"
+    environment:
+      PORT: "80"
+      SUB2_TARGET: "http://host.docker.internal:39080"
+      GROK_MEDIA_TARGET: "http://host.docker.internal:38695"
+    volumes:
+      - ./dist:/app/dist:ro
+      - ./server.mjs:/app/server.mjs:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
