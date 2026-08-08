@@ -22,6 +22,7 @@ import {
 
 const DEFAULT_BASE_URL = process.env.EXPO_PUBLIC_GROK2API_BASE_URL || "http://192.168.123.195:38695";
 const DEFAULT_API_KEY = process.env.EXPO_PUBLIC_GROK2API_KEY || "";
+const DEFAULT_MEDIA_BASE_URL = process.env.EXPO_PUBLIC_GROK2API_MEDIA_BASE_URL || "http://192.168.123.195:38695";
 const DEFAULT_CHAT_MODELS = ["grok-4.5", "grok-4", "grok-3", "grok-3-mini", "grok-composer-2.5-fast"];
 const DEFAULT_IMAGE_MODELS = ["grok-imagine-image"];
 const aspectRatios = ["1:1", "4:3", "3:4", "16:9", "9:16"];
@@ -30,6 +31,7 @@ const counts = [1, 2, 4];
 
 export default function App() {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
+  const [mediaBaseUrl, setMediaBaseUrl] = useState(DEFAULT_MEDIA_BASE_URL);
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
   const [health, setHealth] = useState(null);
   const [models, setModels] = useState([]);
@@ -55,6 +57,7 @@ export default function App() {
   const [saved, setSaved] = useState(false);
 
   const apiBase = useMemo(() => normalizeBaseUrl(baseUrl), [baseUrl]);
+  const mediaApiBase = useMemo(() => normalizeBaseUrl(mediaBaseUrl || baseUrl), [mediaBaseUrl, baseUrl]);
   const imageModels = useMemo(() => mergeModels(models.filter((item) => isImageModel(item.id)).map((item) => item.id), DEFAULT_IMAGE_MODELS), [models]);
   const chatModels = useMemo(() => mergeModels(models.filter((item) => !isImageModel(item.id)).map((item) => item.id), DEFAULT_CHAT_MODELS), [models]);
   const connected = Boolean(health?.ok || health?.status === "ok" || models.length > 0);
@@ -66,14 +69,15 @@ export default function App() {
   async function loadSettings() {
     const stored = await AsyncStorage.getItem("grok-workbench-settings");
     if (stored) {
-      const value = JSON.parse(stored);
-      if (value.baseUrl) setBaseUrl(value.baseUrl);
-      if (value.apiKey) setApiKey(value.apiKey);
+        const value = JSON.parse(stored);
+        if (value.baseUrl) setBaseUrl(value.baseUrl);
+        if (value.mediaBaseUrl) setMediaBaseUrl(value.mediaBaseUrl);
+        if (value.apiKey) setApiKey(value.apiKey);
     }
   }
 
   async function saveSettings() {
-    await AsyncStorage.setItem("grok-workbench-settings", JSON.stringify({ baseUrl, apiKey }));
+    await AsyncStorage.setItem("grok-workbench-settings", JSON.stringify({ baseUrl, mediaBaseUrl, apiKey }));
     setSaved(true);
     setTimeout(() => setSaved(false), 1800);
     await refresh();
@@ -121,7 +125,7 @@ export default function App() {
       });
       const images = (body.data || []).map((item, index) => ({
         id: `${Date.now()}-${index}`,
-        url: absoluteMediaUrl(item.url || item.b64_json),
+        url: absoluteMediaUrl(item.url, item.b64_json),
         prompt: prompt.trim(),
         model
       }));
@@ -219,13 +223,14 @@ export default function App() {
     return body;
   }
 
-  function absoluteMediaUrl(value) {
+  function absoluteMediaUrl(value, b64Json) {
+    if (b64Json && !value) return `data:image/jpeg;base64,${b64Json}`;
     if (!value) return "";
     if (String(value).startsWith("data:")) return value;
     try {
       const url = new URL(value);
       if (["127.0.0.1", "localhost", "::1"].includes(url.hostname)) {
-        const base = new URL(apiBase);
+        const base = new URL(url.pathname.startsWith("/v1/media/") ? mediaApiBase : apiBase);
         url.protocol = base.protocol;
         url.hostname = base.hostname;
         url.port = base.port;
@@ -268,7 +273,7 @@ export default function App() {
             </View>
             <Text style={styles.serverText}>直连 API 网关</Text>
           </View>
-          {settingsOpen ? <Settings {...{ baseUrl, setBaseUrl, apiKey, setApiKey, refresh, saveSettings, saved }} /> : null}
+          {settingsOpen ? <Settings {...{ baseUrl, setBaseUrl, mediaBaseUrl, setMediaBaseUrl, apiKey, setApiKey, refresh, saveSettings, saved }} /> : null}
           {tab === "image" ? <ImageWorkspace {...{ imageModels, model, setModel, imagePickerOpen, setImagePickerOpen, results, shareImage, prompt, setPrompt, count, setCount, aspectRatio, setAspectRatio, resolution, setResolution, generate, loading }} /> : null}
           {tab === "chat" ? <ChatWorkspace {...{ messages, chatInput, setChatInput, sendChat, loading, chatModel, setChatModel, chatModels, chatPickerOpen, setChatPickerOpen }} /> : null}
           {tab === "tools" ? <PromptWorkspace {...{ toolMode, setToolMode, toolInput, setToolInput, toolResult, pickReferenceImage, referenceImage, createPrompt, useToolResult, loading }} /> : null}
@@ -283,10 +288,12 @@ export default function App() {
   );
 }
 
-function Settings({ baseUrl, setBaseUrl, apiKey, setApiKey, refresh, saveSettings, saved }) {
+function Settings({ baseUrl, setBaseUrl, mediaBaseUrl, setMediaBaseUrl, apiKey, setApiKey, refresh, saveSettings, saved }) {
   return <View style={styles.panel}>
     <Text style={styles.label}>API 地址</Text>
     <TextInput value={baseUrl} onChangeText={setBaseUrl} autoCapitalize="none" autoCorrect={false} placeholder="https://api.sky423.cn:18888 或 http://192.168.123.195:38695" placeholderTextColor="#999" style={styles.input} />
+    <Text style={styles.label}>图片媒体地址</Text>
+    <TextInput value={mediaBaseUrl} onChangeText={setMediaBaseUrl} autoCapitalize="none" autoCorrect={false} placeholder="Sub2 转发时填 Grok2API 地址，如 http://192.168.123.195:38695" placeholderTextColor="#999" style={styles.input} />
     <Text style={styles.label}>API Key</Text>
     <TextInput value={apiKey} onChangeText={setApiKey} autoCapitalize="none" autoCorrect={false} secureTextEntry placeholder="sk-... / g2a_..." placeholderTextColor="#999" style={styles.input} />
     <View style={styles.settingsActions}>

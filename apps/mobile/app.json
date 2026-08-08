@@ -3,7 +3,7 @@
     "name": "Grok Workbench",
     "slug": "grok-workbench-mobile",
     "icon": "./assets/icon.png",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "scheme": "grokworkbench",
@@ -13,7 +13,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.local.grokworkbench",
-      "buildNumber": "3",
+      "buildNumber": "4",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -22,7 +22,7 @@
     },
     "android": {
       "package": "com.local.grokworkbench",
-      "versionCode": 3,
+      "versionCode": 4,
       "usesCleartextTraffic": true,
       "permissions": [
         "INTERNET"
