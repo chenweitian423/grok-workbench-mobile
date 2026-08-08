@@ -1,4 +1,5 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import { StatusBar } from "expo-status-bar";
@@ -47,6 +48,7 @@ export default function App() {
   const [tab, setTab] = useState("image");
   const [toolMode, setToolMode] = useState("text");
   const [status, setStatus] = useState("等待连接");
+  const [saved, setSaved] = useState(false);
 
   const apiBase = useMemo(() => baseUrl.replace(/\/+$/, ""), [baseUrl]);
   const imageModels = models.filter((item) => isImageModel(item.id));
@@ -54,8 +56,28 @@ export default function App() {
   const connected = Boolean(health?.ok || health?.status === "ok");
 
   useEffect(() => {
-    refresh();
+    loadSettings();
   }, []);
+
+  async function loadSettings() {
+    try {
+      const stored = await AsyncStorage.getItem("grok-workbench-settings");
+      if (stored) {
+        const value = JSON.parse(stored);
+        if (value.baseUrl) setBaseUrl(value.baseUrl);
+        if (value.apiKey) setApiKey(value.apiKey);
+      }
+    } finally {
+      setTimeout(() => refresh(), 0);
+    }
+  }
+
+  async function saveSettings() {
+    await AsyncStorage.setItem("grok-workbench-settings", JSON.stringify({ baseUrl, apiKey }));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1800);
+    await refresh();
+  }
 
   async function refresh() {
     try {
@@ -102,7 +124,7 @@ export default function App() {
       setStatus(`完成 ${images.length} 张`);
     } catch (error) {
       setStatus("生成失败");
-      Alert.alert("生成失败", error.message);
+      Alert.alert("生成失败", error.message || "上游服务不可用，请确认图片模型和提示词内容。");
     } finally {
       setLoading(false);
     }
@@ -166,7 +188,7 @@ export default function App() {
 
   function useToolResult() {
     if (!toolResult.trim()) return;
-    setPrompt(toolResult.replace(/```json|```/g, "").trim());
+    setPrompt(cleanImagePrompt(toolResult));
     setTab("image");
   }
 
@@ -223,6 +245,11 @@ export default function App() {
     setModel(imageModels[(imageModels.findIndex((item) => item.id === model) + 1) % imageModels.length].id);
   }
 
+  function cycleChatModel() {
+    if (!chatModels.length) return;
+    setChatModel(chatModels[(chatModels.findIndex((item) => item.id === chatModel) + 1) % chatModels.length].id);
+  }
+
   async function shareImage(item) {
     await Share.share({ title: "Grok 生成图", message: item.url, url: item.url });
   }
@@ -249,9 +276,9 @@ export default function App() {
             </View>
             <Text style={styles.serverText}>直连 Grok2API</Text>
           </View>
-          {settingsOpen ? <Settings baseUrl={baseUrl} setBaseUrl={setBaseUrl} apiKey={apiKey} setApiKey={setApiKey} refresh={refresh} /> : null}
+          {settingsOpen ? <Settings baseUrl={baseUrl} setBaseUrl={setBaseUrl} apiKey={apiKey} setApiKey={setApiKey} refresh={refresh} saveSettings={saveSettings} saved={saved} /> : null}
           {tab === "image" ? <ImageWorkspace {...{ imageModels, model, cycleModel, results, shareImage, prompt, setPrompt, count, setCount, aspectRatio, setAspectRatio, resolution, setResolution, generate, loading }} /> : null}
-          {tab === "chat" ? <ChatWorkspace {...{ messages, chatInput, setChatInput, sendChat, loading, chatModel, chatModels }} /> : null}
+          {tab === "chat" ? <ChatWorkspace {...{ messages, chatInput, setChatInput, sendChat, loading, chatModel, chatModels, cycleChatModel }} /> : null}
           {tab === "tools" ? <PromptWorkspace {...{ toolMode, setToolMode, toolInput, setToolInput, toolResult, pickReferenceImage, referenceImage, createPrompt, useToolResult, loading }} /> : null}
         </ScrollView>
         <View style={styles.tabBar}>
@@ -264,13 +291,16 @@ export default function App() {
   );
 }
 
-function Settings({ baseUrl, setBaseUrl, apiKey, setApiKey, refresh }) {
+function Settings({ baseUrl, setBaseUrl, apiKey, setApiKey, refresh, saveSettings, saved }) {
   return <View style={styles.panel}>
     <Text style={styles.label}>Grok2API 地址</Text>
     <TextInput value={baseUrl} onChangeText={setBaseUrl} autoCapitalize="none" autoCorrect={false} style={styles.input} />
     <Text style={styles.label}>客户端 Key</Text>
     <TextInput value={apiKey} onChangeText={setApiKey} autoCapitalize="none" autoCorrect={false} secureTextEntry placeholder="g2a_xxx_xxx" placeholderTextColor="#999" style={styles.input} />
-    <Pressable style={styles.testButton} onPress={refresh}><Ionicons name="pulse-outline" size={18} color="#111" /><Text style={styles.testButtonText}>测试连接</Text></Pressable>
+    <View style={styles.settingsActions}>
+      <Pressable style={styles.testButton} onPress={saveSettings}><Ionicons name="save-outline" size={18} color="#111" /><Text style={styles.testButtonText}>{saved ? "已保存" : "保存配置"}</Text></Pressable>
+      <Pressable style={styles.testButton} onPress={refresh}><Ionicons name="pulse-outline" size={18} color="#111" /><Text style={styles.testButtonText}>测试连接</Text></Pressable>
+    </View>
   </View>;
 }
 
@@ -282,8 +312,12 @@ function ImageWorkspace({ imageModels, model, cycleModel, results, shareImage, p
   </>;
 }
 
-function ChatWorkspace({ messages, chatInput, setChatInput, sendChat, loading }) {
+function ChatWorkspace({ messages, chatInput, setChatInput, sendChat, loading, chatModel, cycleChatModel }) {
   return <View style={styles.chatArea}>
+    <View style={styles.chatToolbar}>
+      <ToolButton icon="chatbubble-ellipses-outline" label={chatModel || "选择聊天模型"} onPress={cycleChatModel} />
+      <Text style={styles.toolbarHint}>点击模型名称切换</Text>
+    </View>
     {messages.length === 0 ? <View style={styles.empty}><Ionicons name="chatbubble-ellipses-outline" size={44} color="#777" /><Text style={styles.emptyTitle}>开始聊天</Text><Text style={styles.emptyText}>直接使用 Grok2API 的聊天模型交流、改写和构思。</Text></View> : messages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.message, item.role === "user" ? styles.userMessage : styles.assistantMessage]}><Text style={styles.messageRole}>{item.role === "user" ? "你" : "Grok"}</Text><Text style={styles.messageText}>{item.content}</Text></View>)}
     <View style={styles.chatComposer}><TextInput value={chatInput} onChangeText={setChatInput} multiline placeholder="输入消息..." placeholderTextColor="#999" style={styles.chatInput} /><Pressable style={[styles.send, loading && styles.sendDisabled]} onPress={sendChat} disabled={loading}>{loading ? <ActivityIndicator color="#fff" /> : <Ionicons name="arrow-up" size={22} color="#fff" />}</Pressable></View>
   </View>;
@@ -316,6 +350,25 @@ function isImageModel(id) {
   return value.includes("image") || value.includes("imagine");
 }
 
+function cleanImagePrompt(value) {
+  let text = String(value || "").replace(/```(?:json|text)?/gi, "").replace(/```/g, "").trim();
+  const markers = ["可复制的完整还原提示词", "完整还原提示词", "还原提示词", "图片生成提示词"];
+  for (const marker of markers) {
+    const index = text.lastIndexOf(marker);
+    if (index >= 0 && text.slice(index + marker.length).trim()) {
+      text = text.slice(index + marker.length).replace(/^[:：\s]+/, "").trim();
+      break;
+    }
+  }
+  if (text.startsWith("{") && text.endsWith("}")) {
+    try {
+      const parsed = JSON.parse(text);
+      text = parsed.prompt || parsed.提示词 || parsed.还原提示词 || text;
+    } catch {}
+  }
+  return text.slice(0, 12000);
+}
+
 function extractChatText(body) {
   const content = body?.choices?.[0]?.message?.content ?? body?.choices?.[0]?.text ?? body?.output?.[0]?.content;
   if (Array.isArray(content)) return content.map((item) => item.text || "").join("");
@@ -344,6 +397,8 @@ const styles = StyleSheet.create({
   label: { fontSize: 13, color: "#555", fontWeight: "800", marginBottom: 8, marginTop: 4 },
   input: { height: 44, borderRadius: 8, borderWidth: 1, borderColor: "#e4e4de", paddingHorizontal: 12, color: "#111", backgroundColor: "#fafaf8" },
   testButton: { marginTop: 12, height: 42, borderRadius: 8, borderWidth: 1, borderColor: "#ddd", alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
+  settingsActions: { flexDirection: "row", gap: 8, marginTop: 12 },
+  toolbarHint: { color: "#888", fontSize: 12, fontWeight: "700" },
   testButtonText: { color: "#111", fontWeight: "800" },
   modeBar: { flexDirection: "row", backgroundColor: "#ecece7", borderRadius: 24, padding: 4, alignSelf: "flex-start", gap: 4, marginBottom: 16 },
   modeActive: { height: 38, paddingHorizontal: 16, borderRadius: 19, flexDirection: "row", gap: 7, alignItems: "center", backgroundColor: "#fff" },
@@ -373,6 +428,7 @@ const styles = StyleSheet.create({
   send: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#111", alignItems: "center", justifyContent: "center" },
   sendDisabled: { opacity: 0.65 },
   chatArea: { gap: 10 },
+  chatToolbar: { minHeight: 44, backgroundColor: "#fff", borderRadius: 8, borderWidth: 1, borderColor: "#ecece7", padding: 4, flexDirection: "row", alignItems: "center", gap: 10 },
   message: { maxWidth: "88%", borderRadius: 8, padding: 12, borderWidth: 1 },
   userMessage: { alignSelf: "flex-end", backgroundColor: "#111", borderColor: "#111" },
   assistantMessage: { alignSelf: "flex-start", backgroundColor: "#fff", borderColor: "#ecece7" },
