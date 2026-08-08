@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+dist/
+build/
+android/
+ios/
+*.apk
+*.aab
+*.ipa
+expo.log
+expo.err.log
+.expo-job.id
+*.keystore
+*.jks
