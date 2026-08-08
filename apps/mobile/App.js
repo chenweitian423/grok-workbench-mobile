@@ -118,7 +118,7 @@ export default function App() {
     setLoading(true);
     setStatus("生成中");
     try {
-      const body = await requestJSON("/v1/images/generations", {
+      const body = await generateImageWithRetry({
         method: "POST",
         auth: true,
         body: { model, prompt: prompt.trim(), n: count, aspect_ratio: aspectRatio, resolution, response_format: "url" }
@@ -136,6 +136,17 @@ export default function App() {
       Alert.alert("生成失败", error.message || "上游服务不可用，请确认图片模型和提示词内容。");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function generateImageWithRetry(options) {
+    try {
+      return await requestJSON("/v1/images/generations", options);
+    } catch (error) {
+      if (!isRetryableUpstreamError(error)) throw error;
+      setStatus("上游繁忙，重试中");
+      await delay(2000);
+      return requestJSON("/v1/images/generations", options);
     }
   }
 
@@ -372,6 +383,15 @@ function migrateGrokBaseUrl(value) {
 
 function mergeModels(primary, fallback) {
   return Array.from(new Set([...primary.filter(Boolean), ...fallback]));
+}
+
+function isRetryableUpstreamError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("上游服务暂不可用") || message.includes("upstream_unavailable") || message.includes("temporarily unavailable");
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isImageModel(id) {

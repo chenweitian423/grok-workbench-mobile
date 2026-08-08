@@ -106,7 +106,7 @@ function App() {
     setBusy(true);
     setStatus("生成中");
     try {
-      const body = await requestJSON("/v1/images/generations", {
+      const body = await generateImageWithRetry({
         method: "POST",
         auth: true,
         body: {
@@ -130,6 +130,17 @@ function App() {
       alert(`生成失败：${error.message}`);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function generateImageWithRetry(options) {
+    try {
+      return await requestJSON("/v1/images/generations", options);
+    } catch (error) {
+      if (!isRetryableUpstreamError(error)) throw error;
+      setStatus("上游繁忙，重试中");
+      await delay(2000);
+      return requestJSON("/v1/images/generations", options);
     }
   }
 
@@ -535,6 +546,15 @@ function joinUrl(base, path) {
 
 function merge(primary, fallback) {
   return Array.from(new Set([...primary.filter(Boolean), ...fallback]));
+}
+
+function isRetryableUpstreamError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("上游服务暂不可用") || message.includes("upstream_unavailable") || message.includes("temporarily unavailable");
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function keepOrFirst(current, models, predicate, fallback) {
