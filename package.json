@@ -1,15 +1,18 @@
 {
-  "name": "grok-workbench-app",
-  "version": "0.1.0",
+  "name": "grok-workbench",
+  "version": "1.0.9",
   "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "start": "npm --prefix apps/mobile start",
-    "webapp:build": "npm --prefix apps/web run build",
-    "android": "npm --prefix apps/mobile run android",
-    "ios": "npm --prefix apps/mobile run ios",
-    "web": "npm --prefix apps/mobile run web",
-    "build:android:apk": "npm --prefix apps/mobile run build:android:apk",
-    "build:android:aab": "npm --prefix apps/mobile run build:android:aab",
-    "build:ios:ipa": "npm --prefix apps/mobile run build:ios:ipa"
+    "version:set": "node scripts/set-version.mjs",
+    "dev:web": "npm --workspace apps/web run dev",
+    "build:web": "npm --workspace apps/web run build",
+    "start:mobile": "npm --workspace apps/mobile run start",
+    "android": "npm --workspace apps/mobile run android",
+    "ios": "npm --workspace apps/mobile run ios",
+    "version:print": "node -p \"require('./package.json').version\""
   }
 }

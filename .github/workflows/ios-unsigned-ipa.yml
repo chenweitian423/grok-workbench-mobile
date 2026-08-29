@@ -4,82 +4,40 @@ on:
   workflow_dispatch:
 
 jobs:
-  ios-unsigned-ipa:
-    name: Build unsigned IPA
-    runs-on: macos-14
-
-    defaults:
-      run:
-        working-directory: apps/mobile
-
+  ios:
+    runs-on: macos-15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
-          cache-dependency-path: apps/mobile/package-lock.json
-
-      - name: Select Xcode 16
+      - run: npm install
+      - run: npm --workspace apps/mobile run prebuild -- --platform ios --clean
+      - name: Build unsigned app
         run: |
-          set -euo pipefail
-          ls -1 /Applications | grep '^Xcode' || true
-          XCODE_APP="$(find /Applications -maxdepth 1 -name 'Xcode_16*.app' | sort -V | tail -n 1)"
-          if [ -z "$XCODE_APP" ]; then
-            echo "No Xcode 16 installation found"
-            exit 1
-          fi
-          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
-          xcodebuild -version
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Prebuild iOS project
-        run: npx expo prebuild --platform ios --non-interactive --clean
-
-      - name: Install CocoaPods
-        run: pod install --project-directory=ios
-
-      - name: Build unsigned iOS app
-        run: |
-          set -euo pipefail
-          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1)"
-          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
-          echo "Workspace: $WORKSPACE"
-          echo "Scheme: $SCHEME"
+          cd apps/mobile
           xcodebuild \
-            -workspace "$WORKSPACE" \
-            -scheme "$SCHEME" \
+            -workspace ios/GrokWorkbench.xcworkspace \
+            -scheme GrokWorkbench \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath build/ios-derived \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            clean build
-
-      - name: Package unsigned IPA
+            build
+      - name: Package IPA
+        id: package
         run: |
-          set -euo pipefail
-          APP_PATH="$(find build/ios-derived/Build/Products -path '*Release-iphoneos/*.app' -type d | head -n 1)"
-          if [ -z "$APP_PATH" ]; then
-            echo "No .app found"
-            find build/ios-derived/Build/Products -maxdepth 4 -print
-            exit 1
-          fi
-          rm -rf dist/Payload
-          mkdir -p dist/Payload
-          cp -R "$APP_PATH" dist/Payload/
-          cd dist
-          zip -qry GrokWorkbench-unsigned.ipa Payload
-          ls -lh GrokWorkbench-unsigned.ipa
-
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
+          VERSION=$(node -p "require('./package.json').version")
+          APP_PATH=$(find apps/mobile/build -path "*/Release-iphoneos/*.app" -type d | head -n 1)
+          mkdir -p Payload artifacts
+          cp -R "$APP_PATH" Payload/GrokWorkbench.app
+          zip -qry "artifacts/GrokWorkbench-v${VERSION}-${GITHUB_RUN_NUMBER}-unsigned.ipa" Payload
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
         with:
-          name: grok-workbench-unsigned-ipa
-          path: apps/mobile/dist/GrokWorkbench-unsigned.ipa
+          name: GrokWorkbench-iOS-v${{ steps.package.outputs.version }}-${{ github.run_number }}-unsigned
+          path: artifacts/*.ipa
+

@@ -1,0 +1,6 @@
+{
+  "name": "@grok-workbench/core",
+  "version": "1.0.9",
+  "type": "module",
+  "main": "src/index.js"
+}

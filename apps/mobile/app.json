@@ -1,19 +1,16 @@
 {
   "expo": {
     "name": "Grok Workbench",
-    "slug": "grok-workbench-mobile",
-    "icon": "./assets/icon.png",
-    "version": "0.2.5",
+    "slug": "grok-workbench",
+    "version": "1.0.9",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "scheme": "grokworkbench",
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "newArchEnabled": true,
     "ios": {
+      "bundleIdentifier": "cn.sky423.grokworkbench",
+      "buildNumber": "1.0.9",
       "supportsTablet": true,
-      "bundleIdentifier": "com.local.grokworkbench",
-      "buildNumber": "7",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -21,25 +18,19 @@
       }
     },
     "android": {
-      "package": "com.local.grokworkbench",
-      "versionCode": 7,
+      "package": "cn.sky423.grokworkbench",
+      "versionCode": 10009,
       "usesCleartextTraffic": true,
-      "permissions": [
-        "INTERNET"
-      ],
       "adaptiveIcon": {
-        "backgroundColor": "#ffffff",
-        "foregroundImage": "./assets/icon.png"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
       }
+    },
+    "web": {
+      "favicon": "./assets/icon.png"
     },
     "extra": {
-      "eas": {
-        "projectId": ""
-      }
-    },
-    "plugins": [
-      "expo-asset",
-      "expo-font"
-    ]
+      "defaultBaseUrl": "http://192.168.123.195:38695"
+    }
   }
 }

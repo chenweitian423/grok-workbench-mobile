@@ -1,512 +1,812 @@
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as FileSystem from "expo-file-system";
+import React, { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Audio } from "expo-av";
+import * as Clipboard from "expo-clipboard";
+import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  KeyboardAvoidingView,
-  Linking,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  TextInput,
-  View
-} from "react-native";
+import { APP_VERSION, DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, buildVideoGenerationBody, extractJobId, extractMediaItems } from "@grok-workbench/core";
 
-const DEFAULT_BASE_URL = process.env.EXPO_PUBLIC_GROK2API_BASE_URL || "https://grok.sky423.cn:18888";
-const DEFAULT_API_KEY = process.env.EXPO_PUBLIC_GROK2API_KEY || "";
-const DEFAULT_MEDIA_BASE_URL = process.env.EXPO_PUBLIC_GROK2API_MEDIA_BASE_URL || "https://grok.sky423.cn:18888";
-const DEFAULT_CHAT_MODELS = ["grok-4.5", "grok-4", "grok-3", "grok-3-mini", "grok-composer-2.5-fast"];
-const DEFAULT_IMAGE_MODELS = ["grok-imagine-image"];
-const aspectRatios = ["1:1", "4:3", "3:4", "16:9", "9:16"];
-const resolutions = ["1k", "2k", "4k"];
-const counts = [1, 2, 4];
+const VOICE_PREVIEW_TEXT = {
+  zh: "你好，这是音色试听。",
+  en: "Hello, this is a voice preview.",
+  ja: "こんにちは、音声の試聴です。",
+  ko: "안녕하세요. 음성 미리듣기입니다.",
+  fr: "Bonjour, ceci est un aperçu vocal.",
+  de: "Hallo, dies ist eine Sprachprobe.",
+  es: "Hola, esta es una prueba de voz."
+};
+
+const KNOWN_CHAT_MODELS = [
+  "grok-composer-2.5-fast",
+  "grok-4.5",
+  "grok-4.6",
+  "grok-build-0.1",
+  "grok-4.3",
+  "grok-chat-fast",
+  "grok-chat-auto",
+  "grok-chat-expert",
+  "grok-chat-heavy"
+];
+
+const MUSIC_MODEL_FALLBACKS = ["grok-4.5", "grok-4.6", "grok-chat-fast"];
+const MUSIC_LENGTH_PROFILES = {
+  short: {
+    label: "短歌",
+    durationLabel: "2–3 分钟",
+    minDuration: 120,
+    maxDuration: 180,
+    minLines: 30,
+    minCharacters: 180,
+    maxTokens: 4200,
+    structure: "[Intro] 2-4 lines; [Verse 1] 6-8 lines; [Pre-Chorus] 3-4 lines; [Chorus] 6-8 lines; [Verse 2] 6-8 lines; [Bridge] 4-6 lines; [Final Chorus] 8-10 lines; [Outro] 2-4 lines"
+  },
+  standard: {
+    label: "标准",
+    durationLabel: "3.5–4.5 分钟",
+    minDuration: 210,
+    maxDuration: 270,
+    minLines: 45,
+    minCharacters: 300,
+    maxTokens: 6500,
+    structure: "[Intro] 2-4 lines; [Verse 1] 6-8 lines; [Pre-Chorus] 4 lines; [Chorus] 6-8 lines; [Verse 2] 6-8 lines; repeat [Pre-Chorus] in full; repeat [Chorus] in full; [Bridge] 4-6 lines; [Final Chorus] 8-10 lines; [Outro] 2-4 lines"
+  },
+  long: {
+    label: "长歌",
+    durationLabel: "4.5–5.5 分钟",
+    minDuration: 270,
+    maxDuration: 330,
+    minLines: 65,
+    minCharacters: 430,
+    maxTokens: 8500,
+    structure: "[Intro] 4 lines; [Verse 1] 10-12 lines; [Pre-Chorus] 4-6 lines; [Chorus] 10-12 lines; [Post-Chorus] 4 lines; [Verse 2] 10-12 lines; repeat [Pre-Chorus] and [Chorus] in full; [Bridge] 8-10 lines; [Final Chorus] 12-16 lines; [Outro] 4-6 lines"
+  }
+};
 
 export default function App() {
-  const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
-  const [mediaBaseUrl, setMediaBaseUrl] = useState(DEFAULT_MEDIA_BASE_URL);
-  const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
-  const [health, setHealth] = useState(null);
-  const [models, setModels] = useState([]);
-  const [model, setModel] = useState(DEFAULT_IMAGE_MODELS[0]);
-  const [chatModel, setChatModel] = useState(DEFAULT_CHAT_MODELS[0]);
-  const [prompt, setPrompt] = useState("一位东方女性，电影质感，精致光影，真实摄影");
-  const [aspectRatio, setAspectRatio] = useState("1:1");
-  const [resolution, setResolution] = useState("1k");
-  const [count, setCount] = useState(1);
-  const [results, setResults] = useState([]);
-  const [messages, setMessages] = useState([]);
+  const [baseUrl, setBaseUrl] = useState(DEFAULT_SERVER_BASE_URL);
+  const [apiKey, setApiKey] = useState("");
+  const [mode, setMode] = useState("image");
+  const [toolId, setToolId] = useState("text-to-prompt");
+  const [prompt, setPrompt] = useState("");
+  const [imageDataUrl, setImageDataUrl] = useState("");
+  const [media, setMedia] = useState([]);
+  const [status, setStatus] = useState("请先填写客户端 Key");
+  const [busy, setBusy] = useState(false);
+  const [voiceMode, setVoiceMode] = useState("tts");
+  const [voiceModel, setVoiceModel] = useState(DEFAULT_MODELS.voice);
+  const [voiceList, setVoiceList] = useState([]);
+  const [voiceId, setVoiceId] = useState("");
+  const [voiceText, setVoiceText] = useState("");
+  const [voiceLanguage, setVoiceLanguage] = useState("zh");
+  const [voiceFile, setVoiceFile] = useState(null);
+  const [transcript, setTranscript] = useState("");
+  const [voiceSynthesisText, setVoiceSynthesisText] = useState("");
+  const [voicePreviewBusy, setVoicePreviewBusy] = useState(false);
+  const [sound, setSound] = useState(null);
+  const [chatModel, setChatModel] = useState(DEFAULT_MODELS.chat);
   const [chatInput, setChatInput] = useState("");
-  const [toolInput, setToolInput] = useState("");
-  const [toolResult, setToolResult] = useState("");
-  const [referenceImage, setReferenceImage] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [tab, setTab] = useState("image");
-  const [toolMode, setToolMode] = useState("text");
-  const [chatPickerOpen, setChatPickerOpen] = useState(false);
-  const [imagePickerOpen, setImagePickerOpen] = useState(false);
-  const [status, setStatus] = useState("等待连接");
-  const [saved, setSaved] = useState(false);
-
-  const apiBase = useMemo(() => normalizeBaseUrl(baseUrl), [baseUrl]);
-  const mediaApiBase = useMemo(() => normalizeBaseUrl(mediaBaseUrl || baseUrl), [mediaBaseUrl, baseUrl]);
-  const imageModels = useMemo(() => mergeModels(models.filter((item) => isImageModel(item.id)).map((item) => item.id), DEFAULT_IMAGE_MODELS), [models]);
-  const chatModels = useMemo(() => mergeModels(models.filter((item) => !isImageModel(item.id)).map((item) => item.id), DEFAULT_CHAT_MODELS), [models]);
-  const connected = Boolean(health?.ok || health?.status === "ok" || models.length > 0);
+  const [chatImages, setChatImages] = useState([]);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [musicInput, setMusicInput] = useState("");
+  const [musicPlan, setMusicPlan] = useState(null);
+  const [musicModel, setMusicModel] = useState("grok-4.5");
+  const [musicLength, setMusicLength] = useState("standard");
+  const [copied, setCopied] = useState("");
+  const api = useMemo(() => new GrokApi({ baseUrl, apiKey }), [baseUrl, apiKey]);
 
   useEffect(() => {
-    loadSettings();
-  }, []);
+    if (mode !== "voice" || !apiKey.trim() || voiceMode !== "tts") return undefined;
+    let cancelled = false;
+    api.voices({ model: voiceModel }).then((data) => {
+      if (cancelled) return;
+      const next = Array.isArray(data?.voices) ? data.voices : [];
+      setVoiceList(next);
+      setVoiceId((current) => next.some((item) => item.voice_id === current) ? current : (next[0]?.voice_id || ""));
+    }).catch((error) => { if (!cancelled) setStatus(error.message); });
+    return () => { cancelled = true; };
+  }, [api, apiKey, mode, voiceMode, voiceModel]);
 
-  async function loadSettings() {
-    const stored = await AsyncStorage.getItem("grok-workbench-settings");
-    if (stored) {
-        const value = JSON.parse(stored);
-        if (value.baseUrl) setBaseUrl(migrateGrokBaseUrl(value.baseUrl));
-        if (value.mediaBaseUrl) setMediaBaseUrl(migrateGrokBaseUrl(value.mediaBaseUrl));
-        if (value.apiKey) setApiKey(value.apiKey);
+  async function pickAudio() {
+    const result = await DocumentPicker.getDocumentAsync({ type: "audio/*", copyToCacheDirectory: true });
+    if (!result.canceled && result.assets?.[0]) {
+      setVoiceFile(result.assets[0]);
+      setTranscript("");
     }
   }
 
-  async function saveSettings() {
-    await AsyncStorage.setItem("grok-workbench-settings", JSON.stringify({ baseUrl, mediaBaseUrl, apiKey }));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1800);
-    await refresh();
+  async function synthesizeVoice() {
+    if (!apiKey.trim()) return setStatus("请先填写客户端 Key");
+    if (!voiceText.trim()) return setStatus("请输入要合成的文字");
+    if (!voiceId) return setStatus("请先选择音色");
+    setBusy(true);
+    try {
+      setStatus(voiceLanguage === "auto" ? "正在合成语音" : "正在翻译目标语言");
+      const synthesisText = await api.translateForSpeech({ text: voiceText, language: voiceLanguage, model: DEFAULT_MODELS.chat });
+      setVoiceSynthesisText(synthesisText);
+      const result = await api.synthesizeSpeech({ model: voiceModel, text: synthesisText, voiceId, language: voiceLanguage, speed: 1 });
+      if (sound) await sound.unloadAsync();
+      const next = await Audio.Sound.createAsync({ uri: result.url }, { shouldPlay: true });
+      setSound(next.sound);
+      setStatus("语音合成完成");
+    } catch (error) { setStatus(error.message); }
+    finally { setBusy(false); }
   }
 
-  async function refresh() {
+  async function previewVoice() {
+    if (!apiKey.trim()) return setStatus("请先填写客户端 Key");
+    if (!voiceId) return setStatus("请先选择音色");
+    setVoicePreviewBusy(true);
     try {
-      setStatus("连接工作台");
-      try {
-        setHealth(await requestJSON("/healthz", { auth: false }));
-      } catch {
-        setHealth({ status: "gateway" });
-      }
+      const language = voiceLanguage === "auto" ? "zh" : voiceLanguage;
+      const sample = VOICE_PREVIEW_TEXT[language] || VOICE_PREVIEW_TEXT.zh;
+      setStatus("正在生成音色试听");
+      const result = await api.synthesizeSpeech({ model: voiceModel, text: sample, voiceId, language, speed: 1 });
+      if (sound) await sound.unloadAsync();
+      const next = await Audio.Sound.createAsync({ uri: result.url }, { shouldPlay: true });
+      setSound(next.sound);
+      setStatus(`试听完成：${voiceId}`);
+    } catch (error) { setStatus(error.message); }
+    finally { setVoicePreviewBusy(false); }
+  }
 
-      if (!apiKey.trim()) {
-        setModels([]);
-        setStatus("请填写 Key");
-        return;
-      }
+  async function transcribeVoice() {
+    if (!apiKey.trim()) return setStatus("请先填写客户端 Key");
+    if (!voiceFile) return setStatus("请先选择音频文件");
+    setBusy(true);
+    try {
+      const result = await api.transcribeAudio({ file: voiceFile, model: DEFAULT_MODELS.speechToText, language: voiceLanguage });
+      setTranscript(result?.text || "接口没有返回识别文本");
+      setStatus("语音识别完成");
+    } catch (error) { setStatus(error.message); }
+    finally { setBusy(false); }
+  }
 
-      const modelsBody = await requestJSON("/v1/models", { auth: true });
-      const nextModels = Array.isArray(modelsBody.data) ? modelsBody.data : [];
-      setModels(nextModels);
-      const nextImage = nextModels.find((item) => isImageModel(item.id));
-      const nextChat = nextModels.find((item) => !isImageModel(item.id));
-      if (nextImage && model === DEFAULT_IMAGE_MODELS[0]) setModel(nextImage.id);
-      if (nextChat && chatModel === DEFAULT_CHAT_MODELS[0]) setChatModel(nextChat.id);
-      setStatus("准备就绪");
+  async function pickImage() {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return setStatus("需要相册权限才能选择参考图");
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.85 });
+    if (!result.canceled && result.assets?.[0]) {
+      const asset = result.assets[0];
+      setImageDataUrl(`data:${asset.mimeType || "image/jpeg"};base64,${asset.base64}`);
+    }
+  }
+
+  async function addChatImages() {
+    const remaining = Math.max(0, 4 - chatImages.length);
+    if (!remaining) return setStatus("单条聊天最多添加 4 张图片");
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return setStatus("需要相册权限才能选择聊天图片");
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      base64: true,
+      quality: 0.85,
+      allowsMultipleSelection: true,
+      selectionLimit: remaining
+    });
+    if (result.canceled || !result.assets?.length) return;
+    const next = result.assets.slice(0, remaining).map((asset) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      name: asset.fileName || `截图-${Date.now()}.jpg`,
+      dataUrl: `data:${asset.mimeType || "image/jpeg"};base64,${asset.base64}`
+    })).filter((item) => item.dataUrl.includes("base64,"));
+    if (!next.length) return setStatus("图片读取失败，请重试");
+    setChatImages((current) => [...current, ...next].slice(0, 4));
+    setStatus(`已添加 ${next.length} 张图片`);
+  }
+
+  function removeChatImage(id) {
+    setChatImages((current) => current.filter((image) => image.id !== id));
+  }
+
+  async function sendChat() {
+    if (!apiKey.trim()) return setStatus("请先填写客户端 Key");
+    if (!chatInput.trim() && !chatImages.length) return setStatus("请输入聊天内容或添加截图");
+    const userMessage = {
+      role: "user",
+      content: chatInput.trim(),
+      images: chatImages.map(({ name, dataUrl }) => ({ name, dataUrl }))
+    };
+    const nextMessages = [...chatMessages, userMessage];
+    setChatMessages(nextMessages);
+    setChatInput("");
+    setChatImages([]);
+    setBusy(true);
+    try {
+      const usesChatCompletions = /chat/i.test(chatModel);
+      const requestMessages = buildMultimodalMessages(nextMessages, usesChatCompletions ? "chat" : "responses");
+      const data = usesChatCompletions
+        ? await api.chat({ model: chatModel, messages: requestMessages })
+        : await api.responses({ model: chatModel, messages: requestMessages });
+      const text = extractTextResponse(data);
+      setChatMessages([...nextMessages, { role: "assistant", content: text }]);
+      setStatus("聊天回复完成");
     } catch (error) {
-      setStatus("连接失败");
-      setHealth(null);
-      Alert.alert("连接失败", error.message);
+      setStatus(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function optimize() {
+    setBusy(true);
+    try {
+      const text = await api.improvePrompt({ toolId, input: prompt, imageDataUrl, model: DEFAULT_MODELS.chat });
+      setPrompt(text || prompt);
+      setStatus("提示词方案已生成");
+    } catch (error) {
+      setStatus(error.message);
+    } finally {
+      setBusy(false);
     }
   }
 
   async function generate() {
-    if (!requireKey() || !prompt.trim()) return;
-    setLoading(true);
-    setStatus("生成中");
+    if (!prompt.trim()) return setStatus("请输入提示词");
+    setBusy(true);
     try {
-      const body = await generateImageWithRetry({
-        method: "POST",
-        auth: true,
-        body: { model, prompt: prompt.trim(), n: count, aspect_ratio: aspectRatio, resolution, response_format: "url" }
-      });
-      const images = (body.data || []).map((item, index) => ({
-        id: `${Date.now()}-${index}`,
-        url: absoluteMediaUrl(item.url, item.b64_json),
-        prompt: prompt.trim(),
-        model
-      }));
-      setResults((current) => [...images, ...current]);
-      setStatus(`完成 ${images.length} 张`);
-    } catch (error) {
-      setStatus("生成失败");
-      Alert.alert("生成失败", error.message || "上游服务不可用，请确认图片模型和提示词内容。");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function generateImageWithRetry(options) {
-    try {
-      return await requestJSON("/v1/images/generations", options);
-    } catch (error) {
-      if (!isRetryableUpstreamError(error)) throw error;
-      setStatus("上游繁忙，重试中");
-      await delay(2000);
-      return requestJSON("/v1/images/generations", options);
-    }
-  }
-
-  async function sendChat() {
-    const text = chatInput.trim();
-    if (!requireKey() || !text) return;
-    const nextMessages = [...messages, { role: "user", content: text }];
-    setChatInput("");
-    setMessages(nextMessages);
-    setLoading(true);
-    try {
-      const body = await requestJSON("/v1/chat/completions", {
-        method: "POST",
-        auth: true,
-        body: { model: chatModel, messages: nextMessages, stream: false }
-      });
-      setMessages((current) => [...current, { role: "assistant", content: extractChatText(body) }]);
-    } catch (error) {
-      Alert.alert("聊天失败", error.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function createPrompt() {
-    if (!requireKey()) return;
-    if (toolMode === "text" && !toolInput.trim()) return;
-    setLoading(true);
-    setToolResult("");
-    try {
-      const instruction = toolMode === "text"
-        ? `把下面的简短描述扩写成专业图片生成提示词。必须使用简体中文输出，只输出一段可直接用于图片生成的完整中文提示词，不要输出 JSON，不要解释。要求包含主体、构图、镜头、光影、色彩、材质、风格、细节和负面约束；必要的模型术语可以保留英文。\n${toolInput.trim()}`
-        : "请分析这张图片并生成可用于图片模型的还原提示词。必须使用简体中文输出。输出两段：第一段为中文结构化要点，第二段标题为“可直接使用的提示词：”，后面只写完整中文提示词；必要的模型术语可以保留英文。";
-      const content = toolMode === "text"
-        ? instruction
-        : [{ type: "text", text: `${instruction}\n${toolInput.trim()}` }, { type: "image_url", image_url: { url: await imageAsDataUrl(referenceImage) } }];
-      const body = await requestJSON("/v1/chat/completions", {
-        method: "POST",
-        auth: true,
-        body: { model: chatModel, messages: [{ role: "user", content }], stream: false }
-      });
-      setToolResult(extractChatText(body));
-    } catch (error) {
-      Alert.alert("提示词生成失败", error.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function pickReferenceImage() {
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.9, base64: false });
-    if (!result.canceled && result.assets?.[0]) {
-      setReferenceImage(result.assets[0]);
-      setToolResult("");
-    }
-  }
-
-  function useToolResult() {
-    if (!toolResult.trim()) return;
-    setPrompt(cleanImagePrompt(toolResult));
-    setTab("image");
-  }
-
-  function requireKey() {
-    if (!apiKey.trim()) {
-      Alert.alert("缺少 Key", "请在右上角设置中填写 API Key。");
-      return false;
-    }
-    return true;
-  }
-
-  async function requestJSON(path, options = {}) {
-    const headers = {};
-    if (options.auth) headers.Authorization = `Bearer ${apiKey.trim()}`;
-    if (options.body) headers["Content-Type"] = "application/json";
-    const response = await fetch(`${apiBase}${path}`, {
-      method: options.method || "GET",
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined
-    });
-    const text = await response.text();
-    let body = {};
-    try { body = text ? JSON.parse(text) : {}; } catch { body = { message: text }; }
-    if (!response.ok) throw new Error(body?.error?.message || body?.message || `HTTP ${response.status}`);
-    return body;
-  }
-
-  function absoluteMediaUrl(value, b64Json) {
-    if (b64Json && !value) return `data:image/jpeg;base64,${b64Json}`;
-    if (!value) return "";
-    if (String(value).startsWith("data:")) return value;
-    try {
-      const url = new URL(value);
-      if (["127.0.0.1", "localhost", "::1"].includes(url.hostname)) {
-        const base = new URL(url.pathname.startsWith("/v1/media/") ? mediaApiBase : apiBase);
-        url.protocol = base.protocol;
-        url.hostname = base.hostname;
-        url.port = base.port;
+      let generationPrompt = prompt;
+      if (mode === "image" && imageDataUrl) {
+        setStatus("正在分析参考图");
+        const referenceDescription = await api.describeReferenceImage({
+          prompt,
+          imageDataUrl,
+          model: DEFAULT_MODELS.chat
+        });
+        if (!referenceDescription.trim()) throw new Error("参考图分析没有返回有效结果");
+        generationPrompt = `${prompt}\n\n参考图视觉约束（在不冲突时保持）：\n${referenceDescription}`;
+        setStatus("参考图分析完成，正在生成图片");
       }
-      return url.toString();
-    } catch {
-      return `${apiBase}${String(value).startsWith("/") ? value : `/${value}`}`;
+      const data = mode === "video"
+        ? await api.generateVideo(buildVideoGenerationBody({ prompt, model: DEFAULT_MODELS.video, duration: 6, resolution: "720p", aspectRatio: "16:9", image: imageDataUrl || undefined }))
+        : await api.generateImage({ prompt: generationPrompt, model: DEFAULT_MODELS.image });
+      setMedia(extractMediaItems(data));
+      setStatus(extractJobId(data) ? `任务已提交：${extractJobId(data)}` : "生成完成");
+    } catch (error) {
+      setStatus(error.message);
+    } finally {
+      setBusy(false);
     }
   }
 
-  async function imageAsDataUrl(asset) {
-    if (!asset?.uri) throw new Error("请先选择一张参考图片");
-    const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
-    return `data:${asset.mimeType || "image/jpeg"};base64,${base64}`;
+  async function generateMusicPlan() {
+    if (!apiKey.trim()) return setStatus("请先填写客户端 Key");
+    if (!musicInput.trim()) return setStatus("请描述你想创作的音乐。");
+    const profile = MUSIC_LENGTH_PROFILES[musicLength] || MUSIC_LENGTH_PROFILES.standard;
+    const messages = buildMusicMessages(musicInput.trim(), musicLength);
+    setBusy(true);
+    try {
+      setStatus(`正在使用 ${displayModelName(musicModel)} 生成${profile.label}参数`);
+      const data = await api.chat({ model: musicModel, temperature: 0.85, max_tokens: profile.maxTokens, messages });
+      let text = data?.choices?.[0]?.message?.content || "";
+      if (!text.trim()) throw new Error("音乐方案没有返回有效内容");
+      let parsed = parseMusicPlan(text);
+      if (!parsed.descriptionEn || !parsed.descriptionZh || !parsed.lyrics) {
+        throw new Error("返回内容缺少英文描述、中文描述或歌词，请重新生成");
+      }
+      let quality = assessMusicLyrics(parsed.lyrics, musicLength);
+      if (!quality.meetsMinimum) {
+        setStatus(`歌词只有 ${quality.lineCount} 行，正在自动扩写`);
+        const retry = await api.chat({
+          model: musicModel,
+          temperature: 0.82,
+          max_tokens: profile.maxTokens,
+          messages: [
+            ...messages,
+            { role: "assistant", content: text },
+            {
+              role: "user",
+              content: `上一次歌词只有 ${quality.lineCount} 个有效演唱行、约 ${quality.characterCount} 个正文字符，没有达到 ${profile.label}最低要求。请从头重写完整结果，至少 ${profile.minLines} 个有效演唱行、${profile.minCharacters} 个正文字符；每段推进故事，所有重复副歌完整写出，不要用拟声词或器乐说明凑行数。`
+            }
+          ]
+        });
+        const retryText = retry?.choices?.[0]?.message?.content || "";
+        const retryPlan = parseMusicPlan(retryText);
+        const retryQuality = assessMusicLyrics(retryPlan.lyrics, musicLength);
+        if (retryPlan.descriptionEn && retryPlan.descriptionZh && retryPlan.lyrics && retryQuality.score > quality.score) {
+          text = retryText;
+          parsed = retryPlan;
+          quality = retryQuality;
+        }
+      }
+      const normalizedPlan = {
+        ...parsed,
+        maxDuration: normalizeMusicDuration(parsed.maxDuration, parsed.lyrics, musicLength),
+        quality
+      };
+      setMusicPlan(normalizedPlan);
+      setStatus(quality.meetsMinimum
+        ? `${profile.label}参数已生成，共 ${quality.lineCount} 行歌词`
+        : `参数已生成，但歌词仅 ${quality.lineCount} 行；建议切换 grok-4.5 或 grok-4.6 后重试`);
+    } catch (error) {
+      setStatus(error.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function shareImage(item) {
-    await Share.share({ title: "Grok 生成图", message: item.url, url: item.url });
+  async function copyField(name, value) {
+    await Clipboard.setStringAsync(String(value ?? ""));
+    setCopied(name);
+    setTimeout(() => setCopied((current) => current === name ? "" : current), 1600);
   }
+
+  const isOutputMode = mode === "image" || mode === "video";
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <ScrollView style={styles.root} contentContainerStyle={styles.content}>
       <StatusBar style="dark" />
-      <KeyboardAvoidingView style={styles.shell} behavior="padding">
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.brand}>GROK WORKBENCH</Text>
-            <Text style={styles.title}>{tab === "image" ? "图片工作台" : tab === "chat" ? "聊天" : "提示词工具"}</Text>
-          </View>
-          <View style={styles.headerButtons}>
-            <Pressable style={styles.iconButton} onPress={refresh}><Ionicons name="refresh" size={20} color="#202020" /></Pressable>
-            <Pressable style={styles.iconButton} onPress={() => setSettingsOpen((value) => !value)}><Ionicons name="settings-outline" size={20} color="#202020" /></Pressable>
-          </View>
+      <View style={styles.header}>
+        <Image source={require("./assets/icon.png")} style={styles.logo} />
+        <View>
+          <Text style={styles.title}>Grok Workbench</Text>
+          <Text style={styles.version}>v{APP_VERSION}</Text>
         </View>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <View style={styles.statusRow}>
-            <View style={[styles.statusPill, connected ? styles.statusGood : styles.statusBad]}>
-              <View style={[styles.dot, connected ? styles.dotGood : styles.dotBad]} />
-              <Text style={styles.statusText}>{status}</Text>
-            </View>
-            <Text style={styles.serverText}>直连 API 网关</Text>
-          </View>
-          {settingsOpen ? <Settings {...{ baseUrl, setBaseUrl, mediaBaseUrl, setMediaBaseUrl, apiKey, setApiKey, refresh, saveSettings, saved }} /> : null}
-          {tab === "image" ? <ImageWorkspace {...{ imageModels, model, setModel, imagePickerOpen, setImagePickerOpen, results, shareImage, prompt, setPrompt, count, setCount, aspectRatio, setAspectRatio, resolution, setResolution, generate, loading }} /> : null}
-          {tab === "chat" ? <ChatWorkspace {...{ messages, chatInput, setChatInput, sendChat, loading, chatModel, setChatModel, chatModels, chatPickerOpen, setChatPickerOpen }} /> : null}
-          {tab === "tools" ? <PromptWorkspace {...{ toolMode, setToolMode, toolInput, setToolInput, toolResult, pickReferenceImage, referenceImage, createPrompt, useToolResult, loading }} /> : null}
-        </ScrollView>
-        <View style={styles.tabBar}>
-          <TabButton icon="image-outline" label="图片" active={tab === "image"} onPress={() => setTab("image")} />
-          <TabButton icon="chatbubble-ellipses-outline" label="聊天" active={tab === "chat"} onPress={() => setTab("chat")} />
-          <TabButton icon="sparkles-outline" label="提示词" active={tab === "tools"} onPress={() => setTab("tools")} />
+      </View>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
+        {["chat", "image", "video", "voice", "music"].map((item) => (
+          <Pressable key={item} style={[styles.tab, mode === item && styles.active]} onPress={() => setMode(item)}>
+            <Text style={styles.tabText}>{item === "chat" ? "聊天" : item === "image" ? "图片" : item === "video" ? "视频" : item === "voice" ? "语音" : "音乐"}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+
+      <Text style={styles.label}>Grok2API 地址</Text>
+      <TextInput value={baseUrl} onChangeText={setBaseUrl} style={styles.input} autoCapitalize="none" />
+      <Text style={styles.label}>客户端 Key</Text>
+      <TextInput value={apiKey} onChangeText={setApiKey} style={styles.input} autoCapitalize="none" secureTextEntry />
+
+      {mode === "chat" ? (
+        <ChatWorkspace
+          chatModel={chatModel}
+          setChatModel={setChatModel}
+          chatInput={chatInput}
+          setChatInput={setChatInput}
+          chatImages={chatImages}
+          addChatImages={addChatImages}
+          removeChatImage={removeChatImage}
+          chatMessages={chatMessages}
+          sendChat={sendChat}
+          busy={busy}
+        />
+      ) : mode === "voice" ? (
+        <VoiceWorkspace {...{ voiceMode, setVoiceMode, voiceModel, setVoiceModel, voiceList, voiceId, setVoiceId, voiceText, setVoiceText, voiceLanguage, setVoiceLanguage, voiceSynthesisText, voiceFile, pickAudio, transcript, synthesizeVoice, previewVoice, transcribeVoice, busy, voicePreviewBusy }} />
+      ) : mode === "music" ? (
+        <MusicWorkspace
+          input={musicInput}
+          setInput={setMusicInput}
+          plan={musicPlan}
+          generate={generateMusicPlan}
+          model={musicModel}
+          setModel={setMusicModel}
+          length={musicLength}
+          setLength={setMusicLength}
+          busy={busy}
+          copied={copied}
+          copyField={copyField}
+        />
+      ) : <>
+        <View style={styles.toolGrid}>
+          {PROMPT_TOOLS.map((tool) => (
+            <Pressable key={tool.id} style={[styles.tool, toolId === tool.id && styles.active]} onPress={() => setToolId(tool.id)}>
+              <Text style={styles.toolTitle}>{tool.title}</Text>
+              <Text style={styles.toolHint}>{tool.hint}</Text>
+            </Pressable>
+          ))}
         </View>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+
+        <TextInput
+          value={prompt}
+          onChangeText={setPrompt}
+          style={styles.textarea}
+          multiline
+          placeholder={mode === "video" ? "描述视频画面、动作、镜头和节奏。" : "描述你的想法，生成图片 Prompt。"}
+        />
+
+        <View style={styles.actions}>
+          <Pressable style={styles.button} onPress={pickImage}><Text style={styles.buttonText}>参考图</Text></Pressable>
+          <Pressable style={styles.button} onPress={optimize}><Text style={styles.buttonText}>生成方案</Text></Pressable>
+          <Pressable style={styles.primary} onPress={generate}><Text style={styles.primaryText}>{mode === "video" ? "生成视频" : "生成图片"}</Text></Pressable>
+        </View>
+      </>}
+
+      {busy && <ActivityIndicator style={styles.loading} />}
+      <Text style={styles.status}>{status}</Text>
+      {isOutputMode && imageDataUrl ? <Image source={{ uri: imageDataUrl }} style={styles.preview} /> : null}
+      {isOutputMode && media.map((item) => {
+        if (!item.url) return null;
+        const isVideo = item.mime.includes("video") || item.url.endsWith(".mp4");
+        return isVideo ? (
+          <Pressable key={item.id} style={styles.videoLink} onPress={() => Linking.openURL(item.url)}>
+            <Text style={styles.videoTitle}>视频生成完成</Text>
+            <Text style={styles.videoUrl} numberOfLines={2}>{item.url}</Text>
+          </Pressable>
+        ) : (
+          <Image key={item.id} source={{ uri: item.url }} style={styles.output} />
+        );
+      })}
+    </ScrollView>
   );
 }
 
-function Settings({ baseUrl, setBaseUrl, mediaBaseUrl, setMediaBaseUrl, apiKey, setApiKey, refresh, saveSettings, saved }) {
-  return <View style={styles.panel}>
-    <Text style={styles.label}>API 地址</Text>
-    <TextInput value={baseUrl} onChangeText={setBaseUrl} autoCapitalize="none" autoCorrect={false} placeholder="https://grok.sky423.cn:18888" placeholderTextColor="#999" style={styles.input} />
-    <Text style={styles.label}>图片媒体地址</Text>
-    <TextInput value={mediaBaseUrl} onChangeText={setMediaBaseUrl} autoCapitalize="none" autoCorrect={false} placeholder="https://grok.sky423.cn:18888" placeholderTextColor="#999" style={styles.input} />
-    <Text style={styles.label}>API Key</Text>
-    <TextInput value={apiKey} onChangeText={setApiKey} autoCapitalize="none" autoCorrect={false} secureTextEntry placeholder="sk-... / g2a_..." placeholderTextColor="#999" style={styles.input} />
-    <View style={styles.settingsActions}>
-      <Pressable style={styles.testButton} onPress={saveSettings}><Ionicons name="save-outline" size={18} color="#111" /><Text style={styles.testButtonText}>{saved ? "已保存" : "保存配置"}</Text></Pressable>
-      <Pressable style={styles.testButton} onPress={refresh}><Ionicons name="pulse-outline" size={18} color="#111" /><Text style={styles.testButtonText}>测试连接</Text></Pressable>
+function ChatWorkspace({ chatModel, setChatModel, chatInput, setChatInput, chatImages, addChatImages, removeChatImage, chatMessages, sendChat, busy }) {
+  return (
+    <View style={styles.chatArea}>
+      <ScrollView style={styles.messages} contentContainerStyle={styles.messagesContent}>
+        {chatMessages.length === 0 ? (
+          <Text style={styles.emptyTitle}>今天想聊什么？</Text>
+        ) : (
+          chatMessages.map((message, index) => (
+            <View key={index} style={[styles.message, message.role === "user" ? styles.userMessage : styles.assistantMessage]}>
+              <Text style={styles.messageRole}>{message.role === "user" ? "你" : "Grok"}</Text>
+              {!!message.content && <Text selectable style={styles.messageText}>{message.content}</Text>}
+              {!!message.images?.length && (
+                <View style={styles.messageImages}>
+                  {message.images.map((image, imageIndex) => (
+                    <Image key={`${image.name}-${imageIndex}`} source={{ uri: image.dataUrl }} style={styles.messageImage} />
+                  ))}
+                </View>
+              )}
+            </View>
+          ))
+        )}
+      </ScrollView>
+      <View style={styles.composer}>
+        {!!chatImages.length && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chatImagePreviews}>
+            {chatImages.map((image) => (
+              <View key={image.id} style={styles.chatImageWrap}>
+                <Image source={{ uri: image.dataUrl }} style={styles.chatImagePreview} />
+                <Pressable style={styles.chatImageRemove} onPress={() => removeChatImage(image.id)}>
+                  <Text style={styles.chatImageRemoveText}>×</Text>
+                </Pressable>
+              </View>
+            ))}
+          </ScrollView>
+        )}
+        <TextInput value={chatInput} onChangeText={setChatInput} style={styles.chatInput} multiline placeholder="输入内容，或添加截图。" />
+        <View style={styles.controlBar}>
+          <Pressable style={styles.button} onPress={addChatImages}><Text style={styles.buttonText}>添加图片（{chatImages.length}/4）</Text></Pressable>
+          <TextInput value={chatModel} onChangeText={setChatModel} style={[styles.input, styles.modelInput]} autoCapitalize="none" placeholder="聊天模型" />
+          <Pressable style={styles.primary} onPress={sendChat} disabled={busy}><Text style={styles.primaryText}>{busy ? "回复中..." : "发送"}</Text></Pressable>
+        </View>
+      </View>
     </View>
-  </View>;
+  );
 }
 
-function ImageWorkspace(props) {
-  const { imageModels, model, setModel, imagePickerOpen, setImagePickerOpen, results, shareImage, prompt, setPrompt, count, setCount, aspectRatio, setAspectRatio, resolution, setResolution, generate, loading } = props;
-  return <>
-    <View style={styles.modeBar}><View style={styles.modeActive}><Ionicons name="image-outline" size={18} color="#111" /><Text style={styles.modeActiveText}>图片生成</Text></View><View style={styles.modeDisabled}><Ionicons name="videocam-outline" size={18} color="#999" /><Text style={styles.modeDisabledText}>视频暂不支持</Text></View></View>
-    <ModelPanel open={imagePickerOpen} models={imageModels} value={model} onSelect={(id) => { setModel(id); setImagePickerOpen(false); }} />
-    <View style={styles.gallery}>{results.length === 0 ? <View style={styles.empty}><MaterialCommunityIcons name="image-sparkle-outline" size={44} color="#777" /><Text style={styles.emptyTitle}>还没有图片</Text><Text style={styles.emptyText}>输入描述后生成，结果会显示在这里。</Text></View> : results.map((item, index) => <View key={item.id} style={styles.card}><Image source={{ uri: item.url }} style={styles.image} resizeMode="cover" /><View style={styles.cardFooter}><Text style={styles.cardTitle}>图片 {results.length - index}</Text><View style={styles.cardActions}><Pressable style={styles.smallButton} onPress={() => shareImage(item)}><Ionicons name="share-outline" size={18} color="#111" /></Pressable><Pressable style={styles.smallButton} onPress={() => Linking.openURL(item.url)}><Ionicons name="open-outline" size={18} color="#111" /></Pressable></View></View></View>)}</View>
-    <View style={styles.composer}><TextInput value={prompt} onChangeText={setPrompt} multiline placeholder="描述你想生成的画面" placeholderTextColor="#999" style={styles.prompt} /><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.controls}><ToolButton icon="sparkles-outline" label={model || "选择图片模型"} onPress={() => setImagePickerOpen((value) => !value)} /><Segment values={counts} value={count} onChange={setCount} suffix="x" /><Segment values={aspectRatios} value={aspectRatio} onChange={setAspectRatio} /><Segment values={resolutions} value={resolution} onChange={setResolution} /></ScrollView><Pressable style={[styles.send, loading && styles.sendDisabled]} onPress={generate} disabled={loading}>{loading ? <ActivityIndicator color="#fff" /> : <Ionicons name="arrow-up" size={24} color="#fff" />}</Pressable></View>
-  </>;
-}
-
-function ChatWorkspace({ messages, chatInput, setChatInput, sendChat, loading, chatModel, setChatModel, chatModels, chatPickerOpen, setChatPickerOpen }) {
-  return <View style={styles.chatArea}>
-    <View style={styles.chatToolbar}>
-      <ToolButton icon="chatbubble-ellipses-outline" label={chatModel || "选择聊天模型"} onPress={() => setChatPickerOpen((value) => !value)} />
-      <Text style={styles.toolbarHint}>点击模型名称选择</Text>
+function MusicWorkspace({ input, setInput, plan, generate, model, setModel, length, setLength, busy, copied, copyField }) {
+  return (
+    <View style={styles.musicArea}>
+      <View style={styles.musicIntro}>
+        <Text style={styles.musicTitle}>音乐创作设定</Text>
+        <Text style={styles.musicHint}>生成 MiniMax Music 3 所需的英文描述、中文说明、歌词和自动时长。</Text>
+      </View>
+      <Text style={styles.label}>音乐想法</Text>
+      <TextInput value={input} onChangeText={setInput} style={styles.textarea} multiline placeholder="例如：一首关于深夜城市和重新出发的中文流行电子歌曲，女声，克制但有希望，适合片尾。" />
+      <Text style={styles.label}>创作模型</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.musicChoices}>
+        {MUSIC_MODEL_FALLBACKS.map((item) => (
+          <Pressable key={item} style={[styles.choiceChip, model === item && styles.active]} onPress={() => setModel(item)} disabled={busy}>
+            <Text style={styles.choiceChipText}>{displayModelName(item)}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+      <Text style={styles.label}>歌曲长度</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.musicLengthChoices}>
+        {Object.entries(MUSIC_LENGTH_PROFILES).map(([id, profile]) => (
+          <Pressable key={id} style={[styles.lengthCard, length === id && styles.active]} onPress={() => setLength(id)} disabled={busy}>
+            <Text style={styles.lengthLabel}>{profile.label}</Text>
+            <Text style={styles.lengthDuration}>{profile.durationLabel}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+      <Pressable style={styles.primary} onPress={generate} disabled={busy}>
+        <Text style={styles.primaryText}>{busy ? "生成中..." : "生成 MiniMax 参数"}</Text>
+      </Pressable>
+      {plan && (
+        <View style={styles.musicOutputs}>
+          <ResultBlock title="Description / English" value={plan.descriptionEn} copied={copied === "descriptionEn"} onCopy={() => copyField("descriptionEn", plan.descriptionEn)} />
+          <ResultBlock title="中文描述" value={plan.descriptionZh} copied={copied === "descriptionZh"} onCopy={() => copyField("descriptionZh", plan.descriptionZh)} />
+          <ResultBlock title={`Lyrics / 歌词${plan.quality ? ` · ${plan.quality.lineCount} 行` : ""}`} value={plan.lyrics} copied={copied === "lyrics"} onCopy={() => copyField("lyrics", plan.lyrics)} />
+          <ResultBlock title="max_duration / 自动时长" value={String(plan.maxDuration)} copied={copied === "duration"} onCopy={() => copyField("duration", String(plan.maxDuration))} />
+        </View>
+      )}
     </View>
-    <ModelPanel open={chatPickerOpen} models={chatModels} value={chatModel} onSelect={(id) => { setChatModel(id); setChatPickerOpen(false); }} />
-    {messages.length === 0 ? <View style={styles.empty}><Ionicons name="chatbubble-ellipses-outline" size={44} color="#777" /><Text style={styles.emptyTitle}>开始聊天</Text><Text style={styles.emptyText}>直接使用所选模型交流、改写和构思。</Text></View> : messages.map((item, index) => <View key={`${item.role}-${index}`} style={[styles.message, item.role === "user" ? styles.userMessage : styles.assistantMessage]}><Text style={styles.messageRole}>{item.role === "user" ? "你" : "Grok"}</Text><Text style={styles.messageText}>{item.content}</Text></View>)}
-    <View style={styles.chatComposer}><TextInput value={chatInput} onChangeText={setChatInput} multiline placeholder="输入消息..." placeholderTextColor="#999" style={styles.chatInput} /><Pressable style={[styles.send, loading && styles.sendDisabled]} onPress={sendChat} disabled={loading}>{loading ? <ActivityIndicator color="#fff" /> : <Ionicons name="arrow-up" size={22} color="#fff" />}</Pressable></View>
+  );
+}
+
+function ResultBlock({ title, value, copied, onCopy }) {
+  return (
+    <View style={styles.resultBlock}>
+      <View style={styles.resultHead}>
+        <Text style={styles.resultTitle}>{title}</Text>
+        <Pressable style={styles.copyButton} onPress={onCopy}><Text style={styles.copyButtonText}>{copied ? "已复制" : "复制"}</Text></Pressable>
+      </View>
+      <Text selectable style={styles.resultText}>{value}</Text>
+    </View>
+  );
+}
+
+function VoiceWorkspace({ voiceMode, setVoiceMode, voiceModel, setVoiceModel, voiceList, voiceId, setVoiceId, voiceText, setVoiceText, voiceLanguage, setVoiceLanguage, voiceSynthesisText, voiceFile, pickAudio, transcript, synthesizeVoice, previewVoice, transcribeVoice, busy, voicePreviewBusy }) {
+  const isTts = voiceMode === "tts";
+  return <View style={styles.voiceArea}>
+    <View style={styles.voiceModes}>
+      <Pressable style={[styles.voiceMode, isTts && styles.active]} onPress={() => setVoiceMode("tts")}><Text>合成语音</Text></Pressable>
+      <Pressable style={[styles.voiceMode, !isTts && styles.active]} onPress={() => setVoiceMode("stt")}><Text>识别语音</Text></Pressable>
+    </View>
+    {isTts ? <>
+      <TextInput value={voiceText} onChangeText={setVoiceText} style={styles.textarea} multiline placeholder="输入要合成的文本。" />
+      <TextInput value={voiceModel} onChangeText={setVoiceModel} style={styles.input} autoCapitalize="none" />
+      <TextInput value={voiceLanguage} onChangeText={setVoiceLanguage} style={styles.input} autoCapitalize="none" placeholder="语言，例如 zh、en、ko、auto" />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.voiceChoices}>
+        {voiceList.map((item) => <Pressable key={item.voice_id} style={[styles.button, voiceId === item.voice_id && styles.active]} onPress={() => setVoiceId(item.voice_id)}><Text>{item.name || item.voice_id}</Text></Pressable>)}
+      </ScrollView>
+      <Pressable style={styles.button} onPress={previewVoice} disabled={voicePreviewBusy || !voiceId}><Text>{voicePreviewBusy ? "试听中..." : "试听当前音色"}</Text></Pressable>
+      <Pressable style={styles.primary} onPress={synthesizeVoice} disabled={busy}><Text style={styles.primaryText}>{busy ? "合成中..." : "合成并播放"}</Text></Pressable>
+      {voiceSynthesisText && voiceSynthesisText !== voiceText.trim() ? <Text selectable style={styles.transcript}>实际合成：{voiceSynthesisText}</Text> : null}
+    </> : <>
+      <Pressable style={styles.audioPicker} onPress={pickAudio}><Text>{voiceFile?.name || "选择音频文件"}</Text></Pressable>
+      <Pressable style={styles.primary} onPress={transcribeVoice} disabled={busy}><Text style={styles.primaryText}>{busy ? "识别中..." : "开始识别"}</Text></Pressable>
+      {transcript ? <Text selectable style={styles.transcript}>{transcript}</Text> : null}
+    </>}
   </View>;
 }
 
-function PromptWorkspace({ toolMode, setToolMode, toolInput, setToolInput, toolResult, pickReferenceImage, referenceImage, createPrompt, useToolResult, loading }) {
-  return <View style={styles.toolArea}>
-    <View style={styles.segmentWide}><Pressable style={[styles.segmentWideItem, toolMode === "text" && styles.segmentWideActive]} onPress={() => setToolMode("text")}><Text style={styles.segmentWideText}>文字生成提示词</Text></Pressable><Pressable style={[styles.segmentWideItem, toolMode === "image" && styles.segmentWideActive]} onPress={() => setToolMode("image")}><Text style={styles.segmentWideText}>图片还原提示词</Text></Pressable></View>
-    {toolMode === "image" ? <Pressable style={styles.imagePicker} onPress={pickReferenceImage}>{referenceImage ? <Image source={{ uri: referenceImage.uri }} style={styles.referenceImage} /> : <><Ionicons name="image-outline" size={28} color="#777" /><Text style={styles.emptyText}>选择参考图片</Text></>}</Pressable> : null}
-    <TextInput value={toolInput} onChangeText={setToolInput} multiline placeholder={toolMode === "text" ? "例如：雨夜东京街头，一位穿红色风衣的女孩" : "选择图片后，可补充你想重点还原的内容"} placeholderTextColor="#999" style={styles.toolInput} />
-    <Pressable style={[styles.primaryButton, loading && styles.sendDisabled]} onPress={createPrompt} disabled={loading}>{loading ? <ActivityIndicator color="#fff" /> : <><Ionicons name="sparkles-outline" size={18} color="#fff" /><Text style={styles.primaryButtonText}>生成提示词</Text></>}</Pressable>
-    {toolResult ? <View style={styles.resultPanel}><Text style={styles.resultLabel}>结果</Text><Text selectable style={styles.resultText}>{toolResult}</Text><Pressable style={styles.secondaryButton} onPress={useToolResult}><Ionicons name="arrow-forward-outline" size={18} color="#111" /><Text style={styles.secondaryButtonText}>发送到图片生成</Text></Pressable></View> : null}
-  </View>;
+function buildMusicMessages(input, length) {
+  const profile = MUSIC_LENGTH_PROFILES[length] || MUSIC_LENGTH_PROFILES.standard;
+  const language = inferMusicLanguage(input);
+  return [
+    {
+      role: "system",
+      content: [
+        "你是一名资深音乐制作人、作词人和 MiniMax Music 3 提示词设计师。",
+        "根据用户的音乐想法，生成可直接填入本地 ComfyUI Text to Music (MiniMax Music 3) 节点的 description、lyrics 和 max_duration。不要调用音乐生成服务，也不要声称已经生成音频。",
+        "即使用户只提供风格、语言或人声，也要在内部补全一个具体而连贯的创作设定：核心人物、关系或目标、明确场景、情绪起点、冲突/变化和最终落点。不要向用户反问。",
+        "DESCRIPTION_EN 必须是纯英文，明确 song/lyrics language，并包含 genre、mood、tempo/BPM、time signature、key、vocals、instruments、arrangement、mixing、情绪弧线和逐段歌曲结构。描述每一段如何服务歌词故事，不要只罗列乐器。",
+        "把负面约束写入 DESCRIPTION_EN 末尾的 Avoid 部分，不生成独立 Negative Prompt。Avoid 至少覆盖 noise、distortion、clipping、auto-tune artifacts、runaway pitch、over-compression、abrupt loop、muddy mix、harsh highs、weak bass、nasal male vocals 和 unprofessional audio。",
+        "DESCRIPTION_ZH 必须使用简体中文，是 DESCRIPTION_EN 的忠实中文说明；保留语言、BPM、调性、段落结构、情绪推进、制作要求和 Avoid 约束，不得增加英文描述没有的要求。",
+        `歌曲长度模式：${profile.label}，目标 ${profile.durationLabel}，MAX_DURATION 必须在 ${profile.minDuration}-${profile.maxDuration} 秒之间。`,
+        `LYRICS 必须是一首完整歌曲而不是提纲。段落结构和行数目标：${profile.structure}。段落标签不计入演唱行数；总计至少 ${profile.minLines} 个非空演唱行、约 ${profile.minCharacters} 个正文字符。`,
+        "所有重复的 Pre-Chorus、Chorus 和 Final Chorus 都必须把歌词完整写出，不得写 Repeat、同上、省略或只放段落标签。除 Intro/Outro 外，每个段落必须有实质歌词。拟声词、哼唱或无意义音节最多两行，不能用来凑长度。",
+        "Verse 1 建立人物与具体场景；Verse 2 必须带来新事件、发现或矛盾，不能换词复述；Bridge 必须产生视角或情绪转折；Final Chorus 在保留核心记忆点的同时完成升华。使用可观察的细节和自然口语，避免连续堆砌空泛成语、陈词滥调和不相关意象。",
+        "歌词要自然可唱，控制单行长度，注意节奏、押韵和副歌记忆点。副歌应有清晰钩子，但不能靠机械重复同一句填满整段。",
+        "LYRICS 只放可演唱歌词和 [Intro]、[Verse 1]、[Pre-Chorus]、[Chorus]、[Post-Chorus]、[Verse 2]、[Bridge]、[Final Chorus]、[Outro] 等英文段落标签；不要加入制作说明、Markdown 标题、项目符号或星号。",
+        "严格遵守用户指定的歌曲语言：中文使用对应中文书写，韩语使用 Hangul，日语使用自然 Kanji/Kana，其他语言使用其本地书写系统。不得用拼音、罗马字或英文翻译代替，除非用户明确要求。DESCRIPTION_EN 的英文要求不得改变歌词语言。",
+        "MAX_DURATION 要综合 BPM、有效歌词字数、演唱速度、前奏/间奏/尾奏和重复段落估算，必须足够唱完全部歌词，并与所选长度模式一致。只输出整数秒数。",
+        "严格按以下边界输出，不要添加解释、代码围栏或其他内容：",
+        "<<<DESCRIPTION_EN>>>",
+        "English description",
+        "<<<DESCRIPTION_ZH>>>",
+        "中文描述",
+        "<<<LYRICS>>>",
+        "lyrics 内容",
+        "<<<MAX_DURATION>>>",
+        "整数秒数",
+        "<<<END>>>"
+      ].join("\n")
+    },
+    {
+      role: "user",
+      content: `${input}\n\nSong language requirement: ${language}. DESCRIPTION_EN must explicitly state this song/lyrics language, and LYRICS must be written in this language.`
+    }
+  ];
 }
 
-function ModelPanel({ open, models, value, onSelect }) {
-  if (!open) return null;
-  return <View style={styles.modelPanel}>
-    {models.map((id) => <Pressable key={id} style={[styles.modelRow, id === value && styles.modelRowActive]} onPress={() => onSelect(id)}>
-      <Text numberOfLines={1} style={[styles.modelRowText, id === value && styles.modelRowTextActive]}>{id}</Text>
-      {id === value ? <Ionicons name="checkmark" size={18} color="#fff" /> : null}
-    </Pressable>)}
-  </View>;
+function assessMusicLyrics(lyrics, length) {
+  const profile = MUSIC_LENGTH_PROFILES[length] || MUSIC_LENGTH_PROFILES.standard;
+  const lines = String(lyrics || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^\[[^\]]+\]$/.test(line));
+  const characterCount = lines.join("").replace(/[\s\p{P}\p{S}]/gu, "").length;
+  const lineScore = Math.min(1, lines.length / profile.minLines);
+  const characterScore = Math.min(1, characterCount / profile.minCharacters);
+  return {
+    lineCount: lines.length,
+    characterCount,
+    meetsMinimum: lines.length >= profile.minLines && characterCount >= profile.minCharacters,
+    score: lineScore + characterScore
+  };
 }
 
-function TabButton({ icon, label, active, onPress }) {
-  return <Pressable style={styles.tabButton} onPress={onPress}><Ionicons name={icon} size={20} color={active ? "#111" : "#888"} /><Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text></Pressable>;
+function normalizeMusicDuration(value, lyrics, length) {
+  const profile = MUSIC_LENGTH_PROFILES[length] || MUSIC_LENGTH_PROFILES.standard;
+  const quality = assessMusicLyrics(lyrics, length);
+  const estimatedVocalSeconds = Math.round(quality.characterCount / 2.2);
+  const densityMinimum = Math.min(profile.maxDuration, Math.max(profile.minDuration, estimatedVocalSeconds + 36));
+  const proposed = Math.round(Number.parseFloat(value) || densityMinimum);
+  return Math.max(densityMinimum, Math.min(profile.maxDuration, proposed));
 }
 
-function ToolButton({ icon, label, onPress }) {
-  return <Pressable style={styles.toolButton} onPress={onPress}><Ionicons name={icon} size={16} color="#111" /><Text numberOfLines={1} style={styles.toolText}>{label}</Text><Ionicons name="chevron-down" size={15} color="#555" /></Pressable>;
-}
-
-function Segment({ values, value, onChange, suffix = "" }) {
-  return <View style={styles.segment}>{values.map((item) => <Pressable key={String(item)} style={[styles.segmentItem, item === value && styles.segmentItemActive]} onPress={() => onChange(item)}><Text style={[styles.segmentText, item === value && styles.segmentTextActive]}>{item}{suffix}</Text></Pressable>)}</View>;
-}
-
-function normalizeBaseUrl(value) {
-  return String(value || DEFAULT_BASE_URL).replace(/\/+$/, "").replace(/\/v1$/i, "");
-}
-
-function migrateGrokBaseUrl(value) {
-  const normalized = normalizeBaseUrl(value);
+function parseMusicPlan(text) {
+  const value = String(text || "").replace(/```(?:text|markdown)?/gi, "").replace(/```/g, "").trim();
   try {
-    const host = new URL(normalized).hostname;
-    if (host === "api.sky423.cn") return DEFAULT_BASE_URL;
+    const json = JSON.parse(value);
+    const descriptionEn = json?.description_en ?? json?.descriptionEn ?? json?.description;
+    const descriptionZh = json?.description_zh ?? json?.descriptionZh ?? json?.chinese_description;
+    if (descriptionEn && json?.lyrics) {
+      return {
+        descriptionEn: String(descriptionEn).trim(),
+        descriptionZh: String(descriptionZh || "").trim(),
+        lyrics: String(json.lyrics).trim(),
+        maxDuration: clampMusicDuration(json?.max_duration ?? json?.maxDuration)
+      };
+    }
   } catch {}
-  return normalized;
+
+  const clean = value.replace(/^\s*[*_]+|[*_]+\s*$/gm, "");
+  const marker = (names) => new RegExp(`(?:^|\\n)\\s*(?:#{1,4}\\s*)?(?:<<<)?(?:${names})(?:>>>)?\\s*[:：]?\\s*`, "i");
+  const headers = {
+    descriptionEn: marker("DESCRIPTION_EN|English\\s+Description|Description\\s*\\(English\\)|Description\\s*\\/\\s*English|Description\\s*\\/\\s*音乐描述|DESCRIPTION"),
+    descriptionZh: marker("DESCRIPTION_ZH|Chinese\\s+Description|Description\\s*\\(中文\\)|中文描述|中文说明"),
+    lyrics: marker("LYRICS|Lyrics\\s*\\/\\s*歌词|歌词"),
+    maxDuration: marker("MAX_DURATION|max_duration|自动时长")
+  };
+  const positions = Object.entries(headers)
+    .map(([name, regex]) => ({ name, match: regex.exec(clean) }))
+    .filter((item) => item.match)
+    .sort((a, b) => a.match.index - b.match.index);
+  const sections = {};
+  positions.forEach((item, index) => {
+    const start = item.match.index + item.match[0].length;
+    const next = positions[index + 1]?.match.index ?? clean.length;
+    sections[item.name] = clean.slice(start, next).replace(/\n?\s*<<<END>>>[\s\S]*$/i, "").trim();
+  });
+
+  let descriptionEn = sections.descriptionEn || "";
+  const negative = clean.match(/(?:^|\n)\s*#{1,4}\s*(?:Negative Prompt|负面提示词)\s*\n([\s\S]*?)(?=\n\s*#{1,4}\s*|$)/i)?.[1]?.trim();
+  if (descriptionEn && negative && !/\bAvoid\b/i.test(descriptionEn)) descriptionEn += `\n\nAvoid: ${negative}`;
+  return {
+    descriptionEn,
+    descriptionZh: sections.descriptionZh || "",
+    lyrics: sections.lyrics || "",
+    maxDuration: clampMusicDuration(sections.maxDuration)
+  };
 }
 
-function mergeModels(primary, fallback) {
-  return Array.from(new Set([...primary.filter(Boolean), ...fallback]));
+function clampMusicDuration(value) {
+  return Math.max(30, Math.min(600, Math.round(Number.parseFloat(value) || 210)));
 }
 
-function isRetryableUpstreamError(error) {
-  const message = String(error?.message || "").toLowerCase();
-  return message.includes("上游服务暂不可用") || message.includes("upstream_unavailable") || message.includes("temporarily unavailable");
+function inferMusicLanguage(input) {
+  const value = String(input || "");
+  const languages = [
+    [/(?:韩文|韓文|韩语|韓語|朝鲜语|朝鮮語|k[- ]?pop|한국어|korean)/i, "Korean (native Hangul lyrics, not romanization)"],
+    [/(?:日文|日语|日語|j[- ]?pop|日本語|japanese)/i, "Japanese (native Kanji and Kana lyrics, not romaji)"],
+    [/(?:粤语|粵語|广东话|廣東話|cantonese)/i, "Cantonese Chinese (natural written Cantonese lyrics)"],
+    [/(?:繁体中文|繁體中文|traditional chinese)/i, "Mandarin Chinese (Traditional Chinese lyrics)"],
+    [/(?:中文|汉语|漢語|国语|國語|普通话|普通話|中文歌|中文歌曲|华语|華語|mandarin|chinese)/i, "Mandarin Chinese (Simplified Chinese lyrics)"],
+    [/(?:英文|英语|英語|英文歌|英文歌曲|english)/i, "English"],
+    [/(?:法文|法语|法語|french)/i, "French"],
+    [/(?:西班牙文|西班牙语|西班牙語|spanish)/i, "Spanish"],
+    [/(?:德文|德语|德語|german)/i, "German"],
+    [/(?:意大利文|意大利语|義大利語|italian)/i, "Italian"],
+    [/(?:葡萄牙文|葡萄牙语|葡萄牙語|portuguese)/i, "Portuguese"],
+    [/(?:俄文|俄语|俄語|russian)/i, "Russian (native Cyrillic lyrics)"],
+    [/(?:泰文|泰语|泰語|thai)/i, "Thai (native Thai script lyrics)"],
+    [/(?:越南文|越南语|越南語|vietnamese)/i, "Vietnamese"],
+    [/(?:阿拉伯文|阿拉伯语|阿拉伯語|arabic)/i, "Arabic (native Arabic script lyrics)"],
+    [/(?:印地文|印地语|印地語|hindi)/i, "Hindi (native Devanagari lyrics)"],
+    [/(?:印尼文|印尼语|印尼語|indonesian)/i, "Indonesian"],
+    [/(?:马来文|馬來文|马来语|馬來語|malay)/i, "Malay"],
+    [/(?:土耳其文|土耳其语|土耳其語|turkish)/i, "Turkish"]
+  ];
+  const matched = languages.find(([pattern]) => pattern.test(value));
+  if (matched) return matched[1];
+  return "Mandarin Chinese (Simplified Chinese lyrics)";
 }
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function buildMultimodalMessages(messages, mode) {
+  return messages.map((message) => {
+    if (!message.images?.length) return { role: message.role, content: message.content };
+    const text = message.content || "请查看并分析上传的图片。";
+    const content = mode === "responses"
+      ? [
+          { type: "input_text", text },
+          ...message.images.map((image) => ({ type: "input_image", image_url: image.dataUrl }))
+        ]
+      : [
+          { type: "text", text },
+          ...message.images.map((image) => ({ type: "image_url", image_url: { url: image.dataUrl } }))
+        ];
+    return { role: message.role, content };
+  });
 }
 
-function isImageModel(id) {
-  const value = String(id || "").toLowerCase();
-  return value.includes("image") || value.includes("imagine") || value.includes("draw") || value.includes("flux");
-}
-
-function cleanImagePrompt(value) {
-  let text = String(value || "").replace(/```(?:json|text)?/gi, "").replace(/```/g, "").trim();
-  const markers = ["可直接使用的提示词", "可复制的完整还原提示词", "完整还原提示词", "还原提示词", "图片生成提示词"];
-  for (const marker of markers) {
-    const index = text.lastIndexOf(marker);
-    if (index >= 0 && text.slice(index + marker.length).trim()) {
-      text = text.slice(index + marker.length).replace(/^[:：\s]+/, "").trim();
-      break;
+function extractTextResponse(data) {
+  const chatText = data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text;
+  if (chatText) return chatText;
+  if (typeof data?.output_text === "string") return data.output_text;
+  const output = Array.isArray(data?.output) ? data.output : [];
+  const parts = [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const block of content) {
+      if (block?.text) parts.push(block.text);
+      if (block?.type === "output_text" && block?.text) parts.push(block.text);
     }
   }
-  if (text.startsWith("{") && text.endsWith("}")) {
-    try {
-      const parsed = JSON.parse(text);
-      text = parsed.prompt || parsed.提示词 || parsed.还原提示词 || text;
-    } catch {}
-  }
-  return text.slice(0, 12000);
+  return parts.join("\n") || "接口没有返回文本";
 }
 
-function extractChatText(body) {
-  const content = body?.choices?.[0]?.message?.content ?? body?.choices?.[0]?.text ?? body?.output?.[0]?.content;
-  if (Array.isArray(content)) return content.map((item) => item.text || "").join("");
-  return String(content || body?.message || "接口没有返回文本");
+function displayModelName(id) {
+  return String(id || "").replace(/^(Web|Console|Build)\//, "");
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#f7f7f4" },
-  shell: { flex: 1 },
-  header: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  brand: { color: "#777", fontSize: 12, fontWeight: "800" },
-  title: { color: "#141414", fontSize: 28, fontWeight: "800", marginTop: 2 },
-  headerButtons: { flexDirection: "row", gap: 10 },
-  iconButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: "#fff", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#ecece7" },
-  content: { paddingHorizontal: 16, paddingBottom: 100 },
-  statusRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
-  statusPill: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, height: 34, borderRadius: 17, borderWidth: 1 },
-  statusGood: { backgroundColor: "#eff8ef", borderColor: "#d7ead7" },
-  statusBad: { backgroundColor: "#fff0ed", borderColor: "#f2d2ca" },
-  dot: { width: 7, height: 7, borderRadius: 4 },
-  dotGood: { backgroundColor: "#2f9e44" },
-  dotBad: { backgroundColor: "#d9480f" },
-  statusText: { color: "#222", fontSize: 13, fontWeight: "800" },
-  serverText: { color: "#777", fontSize: 13, fontWeight: "800" },
-  panel: { backgroundColor: "#fff", borderRadius: 8, padding: 14, borderWidth: 1, borderColor: "#ecece7", marginBottom: 12 },
-  label: { fontSize: 13, color: "#555", fontWeight: "800", marginBottom: 8, marginTop: 4 },
-  input: { minHeight: 44, borderRadius: 8, borderWidth: 1, borderColor: "#e4e4de", paddingHorizontal: 12, color: "#111", backgroundColor: "#fafaf8" },
-  settingsActions: { flexDirection: "row", gap: 8, marginTop: 12 },
-  testButton: { flex: 1, height: 42, borderRadius: 8, borderWidth: 1, borderColor: "#ddd", alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
-  testButtonText: { color: "#111", fontWeight: "800" },
-  modeBar: { flexDirection: "row", backgroundColor: "#ecece7", borderRadius: 24, padding: 4, alignSelf: "flex-start", gap: 4, marginBottom: 16 },
-  modeActive: { height: 38, paddingHorizontal: 16, borderRadius: 19, flexDirection: "row", gap: 7, alignItems: "center", backgroundColor: "#fff" },
-  modeActiveText: { color: "#111", fontWeight: "800" },
-  modeDisabled: { height: 38, paddingHorizontal: 16, borderRadius: 19, flexDirection: "row", gap: 7, alignItems: "center" },
-  modeDisabledText: { color: "#888", fontWeight: "800" },
-  modelPanel: { backgroundColor: "#fff", borderRadius: 8, borderWidth: 1, borderColor: "#ecece7", padding: 8, gap: 6, marginBottom: 12 },
-  modelRow: { height: 40, borderRadius: 8, backgroundColor: "#f4f4f0", paddingHorizontal: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  modelRowActive: { backgroundColor: "#111" },
-  modelRowText: { color: "#222", fontWeight: "800", flex: 1 },
-  modelRowTextActive: { color: "#fff" },
-  gallery: { gap: 16 },
-  empty: { minHeight: 300, borderRadius: 8, borderWidth: 1, borderColor: "#ecece7", backgroundColor: "#fff", alignItems: "center", justifyContent: "center", padding: 24 },
-  emptyTitle: { marginTop: 12, fontSize: 18, fontWeight: "800", color: "#222" },
-  emptyText: { marginTop: 6, fontSize: 14, color: "#777", textAlign: "center" },
-  card: { backgroundColor: "#fff", borderRadius: 8, overflow: "hidden", borderWidth: 1, borderColor: "#ecece7" },
-  image: { width: "100%", aspectRatio: 1 },
-  cardFooter: { minHeight: 54, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  cardTitle: { fontSize: 14, color: "#555", fontWeight: "800" },
-  cardActions: { flexDirection: "row", gap: 8 },
-  smallButton: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: "#f4f4f0" },
-  composer: { marginTop: 18, backgroundColor: "#fff", borderRadius: 8, borderWidth: 1, borderColor: "#deded8", padding: 12 },
-  prompt: { minHeight: 74, maxHeight: 118, color: "#111", fontSize: 15, lineHeight: 21, textAlignVertical: "top" },
-  controls: { alignItems: "center", gap: 8, paddingTop: 10 },
-  toolButton: { height: 36, maxWidth: 240, borderRadius: 18, backgroundColor: "#f4f4f0", paddingHorizontal: 12, alignItems: "center", flexDirection: "row", gap: 6 },
-  toolText: { color: "#111", fontSize: 13, fontWeight: "800", maxWidth: 180 },
-  segment: { height: 36, borderRadius: 18, backgroundColor: "#f4f4f0", padding: 3, flexDirection: "row" },
-  segmentItem: { minWidth: 42, borderRadius: 15, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
-  segmentItemActive: { backgroundColor: "#111" },
-  segmentText: { fontSize: 12, fontWeight: "800", color: "#555" },
-  segmentTextActive: { color: "#fff" },
-  send: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#111", alignItems: "center", justifyContent: "center" },
-  sendDisabled: { opacity: 0.65 },
-  chatArea: { gap: 10 },
-  chatToolbar: { minHeight: 44, backgroundColor: "#fff", borderRadius: 8, borderWidth: 1, borderColor: "#ecece7", padding: 4, flexDirection: "row", alignItems: "center", gap: 10 },
-  toolbarHint: { color: "#888", fontSize: 12, fontWeight: "700" },
-  message: { maxWidth: "88%", borderRadius: 8, padding: 12, borderWidth: 1 },
-  userMessage: { alignSelf: "flex-end", backgroundColor: "#111", borderColor: "#111" },
-  assistantMessage: { alignSelf: "flex-start", backgroundColor: "#fff", borderColor: "#ecece7" },
-  messageRole: { fontSize: 12, fontWeight: "800", color: "#888", marginBottom: 5 },
-  messageText: { color: "#222", fontSize: 15, lineHeight: 22 },
-  chatComposer: { marginTop: 12, minHeight: 80, backgroundColor: "#fff", borderRadius: 8, borderWidth: 1, borderColor: "#deded8", padding: 12, flexDirection: "row", alignItems: "flex-end", gap: 10 },
-  chatInput: { flex: 1, minHeight: 46, maxHeight: 120, fontSize: 15, color: "#111", textAlignVertical: "top" },
-  toolArea: { gap: 12 },
-  segmentWide: { flexDirection: "row", backgroundColor: "#ecece7", borderRadius: 8, padding: 4 },
-  segmentWideItem: { flex: 1, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 6 },
-  segmentWideActive: { backgroundColor: "#fff" },
-  segmentWideText: { color: "#222", fontWeight: "800", fontSize: 13 },
-  imagePicker: { height: 220, borderWidth: 1, borderStyle: "dashed", borderColor: "#cfcfc8", borderRadius: 8, backgroundColor: "#fff", alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  referenceImage: { width: "100%", height: "100%", resizeMode: "contain" },
-  toolInput: { minHeight: 120, borderRadius: 8, borderWidth: 1, borderColor: "#e4e4de", backgroundColor: "#fff", padding: 12, fontSize: 15, lineHeight: 22, color: "#111", textAlignVertical: "top" },
-  primaryButton: { height: 46, borderRadius: 8, backgroundColor: "#111", flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center" },
-  primaryButtonText: { color: "#fff", fontWeight: "800" },
-  resultPanel: { backgroundColor: "#fff", borderRadius: 8, borderWidth: 1, borderColor: "#ecece7", padding: 14 },
-  resultLabel: { color: "#777", fontSize: 12, fontWeight: "800", marginBottom: 8 },
-  resultText: { color: "#222", fontSize: 14, lineHeight: 21 },
-  secondaryButton: { marginTop: 14, height: 42, borderRadius: 8, backgroundColor: "#f4f4f0", flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center" },
-  secondaryButtonText: { color: "#111", fontWeight: "800" },
-  tabBar: { height: 72, backgroundColor: "#fff", borderTopWidth: 1, borderTopColor: "#e7e7e1", flexDirection: "row", justifyContent: "space-around", alignItems: "center" },
-  tabButton: { alignItems: "center", justifyContent: "center", gap: 4, minWidth: 80 },
-  tabText: { color: "#888", fontSize: 12, fontWeight: "700" },
-  tabTextActive: { color: "#111" }
+  root: { flex: 1, backgroundColor: "#f7f8f8" },
+  content: { padding: 18, gap: 14 },
+  header: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 28 },
+  logo: { width: 54, height: 54, borderRadius: 12 },
+  title: { fontSize: 24, fontWeight: "700", color: "#15171c" },
+  version: { color: "#747b85", marginTop: 2 },
+  tabs: { flexDirection: "row", gap: 8, paddingVertical: 2 },
+  tab: { height: 42, minWidth: 76, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1, borderColor: "#dfe3e8", alignItems: "center", justifyContent: "center", backgroundColor: "#fff" },
+  active: { backgroundColor: "#edf1f5", borderColor: "#cbd3dd" },
+  tabText: { color: "#232831", fontWeight: "600" },
+  label: { color: "#69707a", marginTop: 4 },
+  input: { minHeight: 46, backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8", borderRadius: 8, paddingHorizontal: 12 },
+  toolGrid: { gap: 10 },
+  tool: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#e2e6eb", borderRadius: 8, padding: 12 },
+  toolTitle: { fontWeight: "700", color: "#15171c" },
+  toolHint: { color: "#69707a", marginTop: 4, lineHeight: 19 },
+  textarea: { minHeight: 160, textAlignVertical: "top", backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8", borderRadius: 8, padding: 14 },
+  actions: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
+  button: { height: 44, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff", justifyContent: "center" },
+  buttonText: { color: "#22262d", fontWeight: "600" },
+  primary: { height: 44, paddingHorizontal: 18, borderRadius: 8, backgroundColor: "#15171c", justifyContent: "center", alignItems: "center" },
+  primaryText: { color: "#fff", fontWeight: "700" },
+  loading: { marginTop: 4 },
+  status: { color: "#69707a" },
+  preview: { width: 140, height: 140, borderRadius: 8, backgroundColor: "#e9edf2" },
+  output: { width: "100%", aspectRatio: 1, borderRadius: 8, backgroundColor: "#e9edf2" },
+  videoLink: { padding: 14, borderRadius: 8, backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8" },
+  videoTitle: { fontWeight: "700", color: "#15171c" },
+  videoUrl: { color: "#69707a", marginTop: 6 },
+  voiceArea: { gap: 12 },
+  voiceModes: { flexDirection: "row", gap: 8, justifyContent: "center" },
+  voiceMode: { paddingHorizontal: 16, height: 40, borderRadius: 20, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff", justifyContent: "center" },
+  voiceChoices: { gap: 8 },
+  audioPicker: { minHeight: 140, borderWidth: 1, borderStyle: "dashed", borderColor: "#cbd3dd", borderRadius: 8, backgroundColor: "#fff", alignItems: "center", justifyContent: "center" },
+  transcript: { padding: 14, backgroundColor: "#fff", borderRadius: 8, color: "#22262d", lineHeight: 22 },
+  chatArea: { gap: 12 },
+  messages: { maxHeight: 360, backgroundColor: "#fff", borderRadius: 10, borderWidth: 1, borderColor: "#e2e6eb" },
+  messagesContent: { padding: 12, gap: 10 },
+  emptyTitle: { color: "#9aa1ab", textAlign: "center", paddingVertical: 24 },
+  message: { borderRadius: 10, padding: 12, maxWidth: "100%" },
+  userMessage: { backgroundColor: "#eef3fb", alignSelf: "flex-start" },
+  assistantMessage: { backgroundColor: "#f4f6f8", alignSelf: "flex-start" },
+  messageRole: { fontWeight: "700", color: "#15171c", marginBottom: 4 },
+  messageText: { color: "#22262d", lineHeight: 21 },
+  messageImages: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 },
+  messageImage: { width: 96, height: 96, borderRadius: 6, backgroundColor: "#e9edf2" },
+  composer: { gap: 10 },
+  chatInput: { minHeight: 90, maxHeight: 150, textAlignVertical: "top", backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8", borderRadius: 8, padding: 12 },
+  controlBar: { flexDirection: "row", gap: 8, alignItems: "center", flexWrap: "wrap" },
+  modelInput: { flex: 1, minWidth: 140, height: 44 },
+  chatImagePreviews: { gap: 8, paddingVertical: 2 },
+  chatImageWrap: { position: "relative" },
+  chatImagePreview: { width: 72, height: 72, borderRadius: 8, backgroundColor: "#e9edf2" },
+  chatImageRemove: { position: "absolute", top: -6, right: -6, width: 22, height: 22, borderRadius: 11, backgroundColor: "#c0392b", alignItems: "center", justifyContent: "center", zIndex: 2 },
+  chatImageRemoveText: { color: "#fff", fontWeight: "700", lineHeight: 20 },
+  musicArea: { gap: 12 },
+  musicIntro: { gap: 4 },
+  musicTitle: { fontSize: 18, fontWeight: "700", color: "#15171c" },
+  musicHint: { color: "#69707a", lineHeight: 20 },
+  musicChoices: { gap: 8 },
+  choiceChip: { height: 40, paddingHorizontal: 16, borderRadius: 20, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff", justifyContent: "center" },
+  choiceChipText: { color: "#22262d", fontWeight: "600" },
+  musicLengthChoices: { gap: 8 },
+  lengthCard: { minWidth: 110, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff" },
+  lengthLabel: { fontWeight: "700", color: "#15171c" },
+  lengthDuration: { color: "#69707a", marginTop: 2, fontSize: 12 },
+  musicOutputs: { gap: 10 },
+  resultBlock: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#e2e6eb", borderRadius: 10, padding: 12 },
+  resultHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
+  resultTitle: { fontWeight: "700", color: "#15171c", flex: 1, marginRight: 8 },
+  copyButton: { height: 32, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff", justifyContent: "center" },
+  copyButtonText: { color: "#22262d", fontWeight: "600", fontSize: 12 },
+  resultText: { color: "#22262d", lineHeight: 21 }
 });

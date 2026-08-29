@@ -1,32 +1,28 @@
 {
-  "name": "grok-workbench-mobile",
-  "version": "0.2.5",
+  "name": "@grok-workbench/mobile",
+  "version": "1.0.9",
   "private": true,
-  "main": "expo/AppEntry",
+  "main": "index.js",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web",
-    "build:android:apk": "eas build -p android --profile preview",
-    "build:android:aab": "eas build -p android --profile production",
-    "build:ios:ipa": "eas build -p ios --profile preview"
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "prebuild": "expo prebuild",
+    "build:android": "expo prebuild --platform android --clean && cd android && ./gradlew assembleRelease",
+    "build:ios": "expo prebuild --platform ios --clean && xcodebuild -workspace ios/GrokWorkbench.xcworkspace -scheme GrokWorkbench -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO"
   },
   "dependencies": {
-    "@expo/vector-icons": "^14.0.4",
-    "@react-native-async-storage/async-storage": "1.23.1",
-    "expo": "~52.0.48",
-    "expo-asset": "~11.0.5",
-    "expo-file-system": "~18.0.12",
-    "expo-font": "~13.0.4",
-    "expo-image-picker": "~16.0.6",
-    "expo-status-bar": "~2.0.1",
-    "react": "18.3.1",
-    "react-native": "0.76.9",
-    "react-native-safe-area-context": "4.12.0"
+    "@grok-workbench/core": "file:../../packages/core",
+    "expo": "^52.0.25",
+    "expo-av": "~15.0.2",
+    "expo-clipboard": "~7.0.1",
+    "expo-document-picker": "^13.0.2",
+    "expo-image-picker": "^16.0.3",
+    "expo-status-bar": "^2.0.1",
+    "react": "^18.3.1",
+    "react-native": "^0.76.6"
   },
   "devDependencies": {
-    "@babel/core": "^7.25.2",
-    "eas-cli": "^21.7.0"
+    "@babel/core": "^7.26.0"
   }
 }

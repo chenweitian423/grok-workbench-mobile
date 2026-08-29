@@ -1,0 +1,26 @@
+name: Build Web
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install
+      - run: npm run build:web
+      - name: Read version
+        id: version
+        run: echo "value=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grok-workbench-web-v${{ steps.version.outputs.value }}-${{ github.run_number }}
+          path: apps/web/dist
+
