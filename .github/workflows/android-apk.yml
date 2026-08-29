@@ -23,7 +23,9 @@ jobs:
       - run: npm --workspace apps/mobile run build:android
       - name: Read version
         id: version
-        run: echo "value=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
       - name: Rename APK
         run: |
           mkdir -p artifacts
@@ -32,4 +34,3 @@ jobs:
         with:
           name: GrokWorkbench-Android-v${{ steps.version.outputs.value }}-${{ github.run_number }}
           path: artifacts/*.apk
-

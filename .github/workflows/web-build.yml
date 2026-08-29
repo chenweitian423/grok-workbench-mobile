@@ -18,9 +18,10 @@ jobs:
       - run: npm run build:web
       - name: Read version
         id: version
-        run: echo "value=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: grok-workbench-web-v${{ steps.version.outputs.value }}-${{ github.run_number }}
           path: apps/web/dist
-
