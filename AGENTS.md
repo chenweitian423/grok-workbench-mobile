@@ -186,10 +186,19 @@ docker logs --tail 20 grok-workbench-web
 - 部署：本次没有替换任何服务器容器或镜像，Web 线上 1.0.9 保持不变；`grok-workbench-deploy.tgz` 与 `dist-*` 已加入 `.gitignore`，不进入仓库。
 - 遗留：移动端功能补齐未做真实设备上的图片选择/多模态请求联调，依赖用户安装 APK/IPA 后使用真实客户端 Key 验证；iOS IPA 未签名，需侧载（如 AltStore）或后续签名。
 
-### 2026-08-30：移动端补齐提示词页、设置页与逐项模型选择（进行中）
+### 2026-08-30：移动端补齐提示词页、设置页与逐项模型选择
 
-- 状态：进行中。
+- 状态：已完成。
 - 目标：按用户反馈补齐移动端缺失的“提示词”页签（图片还原/文字扩写/影视制作全案）与“设置”页签（API 地址、客户端 Key、获取模型按钮），并让聊天/图片/视频/语音/音乐每一项都能手动选择模型。
 - 版本：保持 `1.0.9`，只改移动端与 CI 产物，不动 Web 线上。
-- 范围：`apps/mobile/App.js`、`apps/mobile/package.json`、根 `package-lock.json`、AGENTS.md。
-- 当前进度：正在重写移动端导航与工作区，加入 AsyncStorage 持久化设置与模型列表。
+- 范围：`apps/mobile/App.js`、`apps/mobile/package.json`、根 `package-lock.json`、AGENTS.md；新增 `@react-native-async-storage/async-storage 1.23.1`（Expo 52 配套版本）。
+- 完成内容：
+  - 页签补齐为 7 个：提示词、聊天、图片、视频、语音、音乐、设置。
+  - 设置页：API 地址、完整客户端 Key 移入设置页，支持“保存设置”与“获取模型”；设置与模型列表通过 AsyncStorage 持久化，启动时自动恢复。
+  - 提示词页：图片还原提示词 / 文字扩写图片提示词 / 一句话影视制作全案，参考图（需要时）、创作模型选择、结果展示与“用于创作”复制回输入框。
+  - 逐项模型选择：聊天、图片、视频、语音均增加模型 chips（从获取的模型列表按类型过滤，并带已知模型兜底）；音乐保持 grok-4.5 / grok-4.6 / grok-chat-fast 切换。
+  - 图片/视频页使用所选图片/视频模型；参考图分析仍走聊天模型。
+- 验证：本地 `npx expo export --platform android` 通过（新增 AsyncStorage 后打包正常）；`npm run build:web` 通过，Web 基线未变。
+- 构建产物：Android run 33269706349 成功，`dist-android/GrokWorkbench-v1.0.9-5.apk`（约 65 MB）；iOS run 33269709668 成功，`dist-ios/GrokWorkbench-v1.0.9-3-unsigned.ipa`（约 5.7 MB）。旧版安装包已移到各自 `旧版本/` 子目录，未删除。
+- 部署：未改动任何服务器容器或镜像，Web 线上 1.0.9 保持不变。
+- 遗留：真实设备验证仍未完成，建议安装 v1.0.9-5 APK / v1.0.9-3 IPA 后重点验证：设置页填 Key 并“获取模型”、各功能页模型 chips、提示词三种工作流、聊天带图。
