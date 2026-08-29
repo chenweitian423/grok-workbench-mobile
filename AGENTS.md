@@ -202,3 +202,14 @@ docker logs --tail 20 grok-workbench-web
 - 构建产物：Android run 33269706349 成功，`dist-android/GrokWorkbench-v1.0.9-5.apk`（约 65 MB）；iOS run 33269709668 成功，`dist-ios/GrokWorkbench-v1.0.9-3-unsigned.ipa`（约 5.7 MB）。旧版安装包已移到各自 `旧版本/` 子目录，未删除。
 - 部署：未改动任何服务器容器或镜像，Web 线上 1.0.9 保持不变。
 - 遗留：真实设备验证仍未完成，建议安装 v1.0.9-5 APK / v1.0.9-3 IPA 后重点验证：设置页填 Key 并“获取模型”、各功能页模型 chips、提示词三种工作流、聊天带图。
+
+### 2026-08-30：仓库可见性确认、Actions 额度与构建记录清理
+
+- 状态：已完成。
+- 目标：确认 `grok-workbench-mobile` 为公开仓库（开源项目，避免私有仓库消耗 Actions 免费分钟额度），检查额度状态并清理旧构建记录。
+- 仓库可见性：已确认 `chenweitian423/grok-workbench-mobile` 为 `PUBLIC`，无需再改；公开仓库的 GitHub Actions 免费且不限分钟，本项目构建不消耗账户额度。
+- 额度说明：账户级精确分钟用量需要 gh 授权 `user` scope（会弹出浏览器授权）或在 GitHub 网页 Settings → Billing 查看；账号下另有 2 个私有仓库 `mmusic-client`、`tmdb`，只有私有仓库的 Actions 才消耗 Free 计划每月 2000 分钟免费额度。
+- 清理动作：删除 11 条旧构建记录（失败/取消/早期成功 runs），保留最新 Web（33270195834）、Android v1.0.9-6（33270195830）、iOS v1.0.9-3（33269709668）；旧 artifacts 随 run 自动清除，GitHub 上现有 artifacts 仅 web v6、android v6、ios v3 三项。
+- 工作流优化：`android-apk.yml` 与 `web-build.yml` 增加 push 路径过滤（`apps/mobile/**`、`apps/web/**`、`packages/**`、`package.json`、`package-lock.json`），以后仅文档/AGENTS.md 变更不再触发构建；iOS 仍为手动触发。
+- 本地产物：最新 Android 安装包 `dist-android/GrokWorkbench-v1.0.9-6.apk`；旧版 v1.0.9-3、v1.0.9-5 已移入 `dist-android/旧版本/`；iOS 最新为 `dist-ios/GrokWorkbench-v1.0.9-3-unsigned.ipa`，旧版在 `dist-ios/旧版本/`。
+- 部署：未改动服务器容器或镜像，Web 线上 1.0.9 保持不变。
