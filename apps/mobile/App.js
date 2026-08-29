@@ -1,11 +1,24 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio } from "expo-av";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { StatusBar } from "expo-status-bar";
-import { APP_VERSION, DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, buildVideoGenerationBody, extractJobId, extractMediaItems } from "@grok-workbench/core";
+import { APP_VERSION, DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, PROMPT_WORKFLOWS, buildVideoGenerationBody, extractJobId, extractMediaItems } from "@grok-workbench/core";
+
+const SETTINGS_KEY = "grok-workbench-mobile-settings";
+
+const TABS = [
+  { id: "prompt", label: "提示词" },
+  { id: "chat", label: "聊天" },
+  { id: "image", label: "图片" },
+  { id: "video", label: "视频" },
+  { id: "voice", label: "语音" },
+  { id: "music", label: "音乐" },
+  { id: "settings", label: "设置" }
+];
 
 const VOICE_PREVIEW_TEXT = {
   zh: "你好，这是音色试听。",
@@ -27,6 +40,19 @@ const KNOWN_CHAT_MODELS = [
   "grok-chat-auto",
   "grok-chat-expert",
   "grok-chat-heavy"
+];
+
+const KNOWN_IMAGE_MODELS = [
+  "grok-imagine-image-2.0",
+  "grok-imagine-image",
+  "grok-imagine-image-lite",
+  "grok-imagine-image-quality"
+];
+
+const KNOWN_VOICE_MODELS = [
+  "grok-voice-latest",
+  "grok-voice-think-fast-1.0",
+  "grok-voice-think-fast-2.0"
 ];
 
 const MUSIC_MODEL_FALLBACKS = ["grok-4.5", "grok-4.6", "grok-chat-fast"];
@@ -66,15 +92,17 @@ const MUSIC_LENGTH_PROFILES = {
 export default function App() {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_SERVER_BASE_URL);
   const [apiKey, setApiKey] = useState("");
-  const [mode, setMode] = useState("image");
-  const [toolId, setToolId] = useState("text-to-prompt");
-  const [prompt, setPrompt] = useState("");
+  const [models, setModels] = useState([]);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [mode, setMode] = useState("prompt");
+  const [workflowId, setWorkflowId] = useState("text-to-prompt");
+  const [promptInput, setPromptInput] = useState("");
+  const [generatedPrompt, setGeneratedPrompt] = useState("");
   const [imageDataUrl, setImageDataUrl] = useState("");
   const [media, setMedia] = useState([]);
-  const [status, setStatus] = useState("请先填写客户端 Key");
+  const [status, setStatus] = useState("请在设置里填写客户端 Key 并获取模型");
   const [busy, setBusy] = useState(false);
   const [voiceMode, setVoiceMode] = useState("tts");
-  const [voiceModel, setVoiceModel] = useState(DEFAULT_MODELS.voice);
   const [voiceList, setVoiceList] = useState([]);
   const [voiceId, setVoiceId] = useState("");
   const [voiceText, setVoiceText] = useState("");
@@ -84,16 +112,44 @@ export default function App() {
   const [voiceSynthesisText, setVoiceSynthesisText] = useState("");
   const [voicePreviewBusy, setVoicePreviewBusy] = useState(false);
   const [sound, setSound] = useState(null);
-  const [chatModel, setChatModel] = useState(DEFAULT_MODELS.chat);
   const [chatInput, setChatInput] = useState("");
   const [chatImages, setChatImages] = useState([]);
   const [chatMessages, setChatMessages] = useState([]);
   const [musicInput, setMusicInput] = useState("");
   const [musicPlan, setMusicPlan] = useState(null);
-  const [musicModel, setMusicModel] = useState("grok-4.5");
   const [musicLength, setMusicLength] = useState("standard");
   const [copied, setCopied] = useState("");
+  const [chatModel, setChatModel] = useState(DEFAULT_MODELS.chat);
+  const [imageModel, setImageModel] = useState(DEFAULT_MODELS.image);
+  const [videoModel, setVideoModel] = useState(DEFAULT_MODELS.video);
+  const [voiceModel, setVoiceModel] = useState(DEFAULT_MODELS.voice);
+  const [musicModel, setMusicModel] = useState("grok-4.5");
+
   const api = useMemo(() => new GrokApi({ baseUrl, apiKey }), [baseUrl, apiKey]);
+  const workflow = PROMPT_WORKFLOWS.find((item) => item.id === workflowId) || PROMPT_WORKFLOWS[1];
+  const modelLists = useMemo(() => buildModelLists(models), [models]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(SETTINGS_KEY);
+        if (raw) {
+          const saved = JSON.parse(raw);
+          if (saved.baseUrl) setBaseUrl(saved.baseUrl);
+          if (saved.apiKey) setApiKey(saved.apiKey);
+          if (Array.isArray(saved.models) && saved.models.length) setModels(saved.models);
+        }
+      } catch {}
+      finally {
+        setSettingsLoaded(true);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!settingsLoaded) return undefined;
+    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey, models })).catch(() => {});
+  }, [settingsLoaded, baseUrl, apiKey, models]);
 
   useEffect(() => {
     if (mode !== "voice" || !apiKey.trim() || voiceMode !== "tts") return undefined;
@@ -107,6 +163,43 @@ export default function App() {
     return () => { cancelled = true; };
   }, [api, apiKey, mode, voiceMode, voiceModel]);
 
+  function requireKey() {
+    if (!apiKey.trim()) {
+      setStatus("请先在设置里填写完整客户端 Key");
+      return false;
+    }
+    return true;
+  }
+
+  async function saveSettings() {
+    try {
+      await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey, models }));
+      setStatus("设置已保存");
+    } catch (error) {
+      setStatus(`保存失败：${error.message}`);
+    }
+  }
+
+  async function loadModels() {
+    if (!apiKey.trim()) return setStatus("请先在设置里填写完整客户端 Key");
+    setBusy(true);
+    try {
+      const data = await api.models();
+      const list = (data?.data || []).map((item) => item.id).filter(Boolean);
+      setModels(list);
+      const mapped = list.map(normalizeModelOption);
+      setChatModel((current) => pickChatModel(mapped) || current);
+      setImageModel((current) => pickImageModel(mapped) || current);
+      setVideoModel((current) => pickVideoModel(mapped) || current);
+      setVoiceModel((current) => pickVoiceModel(mapped) || current);
+      setStatus(`已读取 ${list.length} 个模型，可在各功能页选择`);
+    } catch (error) {
+      setStatus(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function pickAudio() {
     const result = await DocumentPicker.getDocumentAsync({ type: "audio/*", copyToCacheDirectory: true });
     if (!result.canceled && result.assets?.[0]) {
@@ -116,13 +209,13 @@ export default function App() {
   }
 
   async function synthesizeVoice() {
-    if (!apiKey.trim()) return setStatus("请先填写客户端 Key");
+    if (!requireKey()) return;
     if (!voiceText.trim()) return setStatus("请输入要合成的文字");
     if (!voiceId) return setStatus("请先选择音色");
     setBusy(true);
     try {
       setStatus(voiceLanguage === "auto" ? "正在合成语音" : "正在翻译目标语言");
-      const synthesisText = await api.translateForSpeech({ text: voiceText, language: voiceLanguage, model: DEFAULT_MODELS.chat });
+      const synthesisText = await api.translateForSpeech({ text: voiceText, language: voiceLanguage, model: chatModel });
       setVoiceSynthesisText(synthesisText);
       const result = await api.synthesizeSpeech({ model: voiceModel, text: synthesisText, voiceId, language: voiceLanguage, speed: 1 });
       if (sound) await sound.unloadAsync();
@@ -134,7 +227,7 @@ export default function App() {
   }
 
   async function previewVoice() {
-    if (!apiKey.trim()) return setStatus("请先填写客户端 Key");
+    if (!requireKey()) return;
     if (!voiceId) return setStatus("请先选择音色");
     setVoicePreviewBusy(true);
     try {
@@ -151,7 +244,7 @@ export default function App() {
   }
 
   async function transcribeVoice() {
-    if (!apiKey.trim()) return setStatus("请先填写客户端 Key");
+    if (!requireKey()) return;
     if (!voiceFile) return setStatus("请先选择音频文件");
     setBusy(true);
     try {
@@ -164,11 +257,12 @@ export default function App() {
 
   async function pickImage() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) return setStatus("需要相册权限才能选择参考图");
+    if (!permission.granted) return setStatus("需要相册权限才能选择图片");
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.85 });
     if (!result.canceled && result.assets?.[0]) {
       const asset = result.assets[0];
       setImageDataUrl(`data:${asset.mimeType || "image/jpeg"};base64,${asset.base64}`);
+      setStatus("参考图已选择");
     }
   }
 
@@ -200,7 +294,7 @@ export default function App() {
   }
 
   async function sendChat() {
-    if (!apiKey.trim()) return setStatus("请先填写客户端 Key");
+    if (!requireKey()) return;
     if (!chatInput.trim() && !chatImages.length) return setStatus("请输入聊天内容或添加截图");
     const userMessage = {
       role: "user",
@@ -228,12 +322,15 @@ export default function App() {
     }
   }
 
-  async function optimize() {
+  async function runWorkflow() {
+    if (!requireKey()) return;
+    if (workflow.needsImage && !imageDataUrl) return setStatus("这个功能需要先上传图片");
+    if (!workflow.needsImage && !promptInput.trim()) return setStatus("请输入一句话或文字描述");
     setBusy(true);
     try {
-      const text = await api.improvePrompt({ toolId, input: prompt, imageDataUrl, model: DEFAULT_MODELS.chat });
-      setPrompt(text || prompt);
-      setStatus("提示词方案已生成");
+      const text = await api.runPromptWorkflow({ workflowId, input: promptInput, imageDataUrl, model: chatModel });
+      setGeneratedPrompt(text);
+      setStatus(`${workflow.outputLabel}已生成`);
     } catch (error) {
       setStatus(error.message);
     } finally {
@@ -241,27 +338,57 @@ export default function App() {
     }
   }
 
-  async function generate() {
-    if (!prompt.trim()) return setStatus("请输入提示词");
+  function copyGeneratedToInput() {
+    if (!generatedPrompt.trim()) return;
+    setPromptInput(generatedPrompt);
+    setStatus("已复制到输入框，可到图片/视频页使用");
+  }
+
+  async function createImage() {
+    if (!requireKey()) return;
+    const originalPrompt = String(generatedPrompt || promptInput || "").trim();
+    if (!originalPrompt) return setStatus("请输入或生成图片提示词");
     setBusy(true);
     try {
-      let generationPrompt = prompt;
-      if (mode === "image" && imageDataUrl) {
-        setStatus("正在分析参考图");
+      let prompt = originalPrompt;
+      if (imageDataUrl) {
+        setStatus("正在分析参考图并提取视觉约束");
         const referenceDescription = await api.describeReferenceImage({
-          prompt,
+          prompt: originalPrompt,
           imageDataUrl,
-          model: DEFAULT_MODELS.chat
+          model: chatModel
         });
         if (!referenceDescription.trim()) throw new Error("参考图分析没有返回有效结果");
-        generationPrompt = `${prompt}\n\n参考图视觉约束（在不冲突时保持）：\n${referenceDescription}`;
+        prompt = `${originalPrompt}\n\n参考图视觉约束（在不冲突时保持）：\n${referenceDescription}`;
         setStatus("参考图分析完成，正在生成图片");
       }
-      const data = mode === "video"
-        ? await api.generateVideo(buildVideoGenerationBody({ prompt, model: DEFAULT_MODELS.video, duration: 6, resolution: "720p", aspectRatio: "16:9", image: imageDataUrl || undefined }))
-        : await api.generateImage({ prompt: generationPrompt, model: DEFAULT_MODELS.image });
+      const data = await api.generateImage({ prompt, model: imageModel });
       setMedia(extractMediaItems(data));
-      setStatus(extractJobId(data) ? `任务已提交：${extractJobId(data)}` : "生成完成");
+      setStatus(extractJobId(data) ? `任务已提交：${extractJobId(data)}` : "图片生成完成");
+    } catch (error) {
+      setStatus(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createVideo() {
+    if (!requireKey()) return;
+    const rawPrompt = String(generatedPrompt || promptInput || "").trim();
+    if (!rawPrompt) return setStatus("请输入或生成视频提示词");
+    setBusy(true);
+    try {
+      setStatus("正在提交视频任务");
+      const data = await api.generateVideo(buildVideoGenerationBody({
+        prompt: rawPrompt,
+        model: videoModel,
+        duration: 6,
+        resolution: "720p",
+        aspectRatio: "16:9",
+        image: imageDataUrl || undefined
+      }));
+      setMedia(extractMediaItems(data));
+      setStatus(extractJobId(data) ? `任务已提交：${extractJobId(data)}` : "视频生成完成");
     } catch (error) {
       setStatus(error.message);
     } finally {
@@ -270,7 +397,7 @@ export default function App() {
   }
 
   async function generateMusicPlan() {
-    if (!apiKey.trim()) return setStatus("请先填写客户端 Key");
+    if (!requireKey()) return;
     if (!musicInput.trim()) return setStatus("请描述你想创作的音乐。");
     const profile = MUSIC_LENGTH_PROFILES[musicLength] || MUSIC_LENGTH_PROFILES.standard;
     const messages = buildMusicMessages(musicInput.trim(), musicLength);
@@ -345,22 +472,39 @@ export default function App() {
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
-        {["chat", "image", "video", "voice", "music"].map((item) => (
-          <Pressable key={item} style={[styles.tab, mode === item && styles.active]} onPress={() => setMode(item)}>
-            <Text style={styles.tabText}>{item === "chat" ? "聊天" : item === "image" ? "图片" : item === "video" ? "视频" : item === "voice" ? "语音" : "音乐"}</Text>
+        {TABS.map((item) => (
+          <Pressable key={item.id} style={[styles.tab, mode === item.id && styles.active]} onPress={() => setMode(item.id)}>
+            <Text style={styles.tabText}>{item.label}</Text>
           </Pressable>
         ))}
       </ScrollView>
 
-      <Text style={styles.label}>Grok2API 地址</Text>
-      <TextInput value={baseUrl} onChangeText={setBaseUrl} style={styles.input} autoCapitalize="none" />
-      <Text style={styles.label}>客户端 Key</Text>
-      <TextInput value={apiKey} onChangeText={setApiKey} style={styles.input} autoCapitalize="none" secureTextEntry />
+      <Text style={styles.status}>{status}</Text>
 
-      {mode === "chat" ? (
+      {mode === "settings" ? (
+        <SettingsWorkspace baseUrl={baseUrl} setBaseUrl={setBaseUrl} apiKey={apiKey} setApiKey={setApiKey} saveSettings={saveSettings} loadModels={loadModels} models={models} busy={busy} />
+      ) : mode === "prompt" ? (
+        <PromptWorkspace
+          workflow={workflow}
+          workflowId={workflowId}
+          setWorkflowId={setWorkflowId}
+          input={promptInput}
+          setInput={setPromptInput}
+          imageDataUrl={imageDataUrl}
+          pickImage={pickImage}
+          runWorkflow={runWorkflow}
+          generatedPrompt={generatedPrompt}
+          copyGeneratedToInput={copyGeneratedToInput}
+          chatModel={chatModel}
+          setChatModel={setChatModel}
+          chatModelOptions={modelLists.chat}
+          busy={busy}
+        />
+      ) : mode === "chat" ? (
         <ChatWorkspace
           chatModel={chatModel}
           setChatModel={setChatModel}
+          chatModelOptions={modelLists.chat}
           chatInput={chatInput}
           setChatInput={setChatInput}
           chatImages={chatImages}
@@ -371,7 +515,29 @@ export default function App() {
           busy={busy}
         />
       ) : mode === "voice" ? (
-        <VoiceWorkspace {...{ voiceMode, setVoiceMode, voiceModel, setVoiceModel, voiceList, voiceId, setVoiceId, voiceText, setVoiceText, voiceLanguage, setVoiceLanguage, voiceSynthesisText, voiceFile, pickAudio, transcript, synthesizeVoice, previewVoice, transcribeVoice, busy, voicePreviewBusy }} />
+        <VoiceWorkspace
+          voiceMode={voiceMode}
+          setVoiceMode={setVoiceMode}
+          voiceModel={voiceModel}
+          setVoiceModel={setVoiceModel}
+          voiceModelOptions={modelLists.voice}
+          voiceList={voiceList}
+          voiceId={voiceId}
+          setVoiceId={setVoiceId}
+          voiceText={voiceText}
+          setVoiceText={setVoiceText}
+          voiceLanguage={voiceLanguage}
+          setVoiceLanguage={setVoiceLanguage}
+          voiceSynthesisText={voiceSynthesisText}
+          voiceFile={voiceFile}
+          pickAudio={pickAudio}
+          transcript={transcript}
+          synthesizeVoice={synthesizeVoice}
+          previewVoice={previewVoice}
+          transcribeVoice={transcribeVoice}
+          busy={busy}
+          voicePreviewBusy={voicePreviewBusy}
+        />
       ) : mode === "music" ? (
         <MusicWorkspace
           input={musicInput}
@@ -386,34 +552,23 @@ export default function App() {
           copied={copied}
           copyField={copyField}
         />
-      ) : <>
-        <View style={styles.toolGrid}>
-          {PROMPT_TOOLS.map((tool) => (
-            <Pressable key={tool.id} style={[styles.tool, toolId === tool.id && styles.active]} onPress={() => setToolId(tool.id)}>
-              <Text style={styles.toolTitle}>{tool.title}</Text>
-              <Text style={styles.toolHint}>{tool.hint}</Text>
-            </Pressable>
-          ))}
-        </View>
-
-        <TextInput
-          value={prompt}
-          onChangeText={setPrompt}
-          style={styles.textarea}
-          multiline
-          placeholder={mode === "video" ? "描述视频画面、动作、镜头和节奏。" : "描述你的想法，生成图片 Prompt。"}
+      ) : (
+        <MediaWorkspace
+          mode={mode}
+          model={mode === "video" ? videoModel : imageModel}
+          setModel={mode === "video" ? setVideoModel : setImageModel}
+          modelOptions={mode === "video" ? modelLists.video : modelLists.image}
+          input={promptInput}
+          setInput={setPromptInput}
+          imageDataUrl={imageDataUrl}
+          pickImage={pickImage}
+          create={mode === "video" ? createVideo : createImage}
+          busy={busy}
+          media={media}
         />
-
-        <View style={styles.actions}>
-          <Pressable style={styles.button} onPress={pickImage}><Text style={styles.buttonText}>参考图</Text></Pressable>
-          <Pressable style={styles.button} onPress={optimize}><Text style={styles.buttonText}>生成方案</Text></Pressable>
-          <Pressable style={styles.primary} onPress={generate}><Text style={styles.primaryText}>{mode === "video" ? "生成视频" : "生成图片"}</Text></Pressable>
-        </View>
-      </>}
+      )}
 
       {busy && <ActivityIndicator style={styles.loading} />}
-      <Text style={styles.status}>{status}</Text>
-      {isOutputMode && imageDataUrl ? <Image source={{ uri: imageDataUrl }} style={styles.preview} /> : null}
       {isOutputMode && media.map((item) => {
         if (!item.url) return null;
         const isVideo = item.mime.includes("video") || item.url.endsWith(".mp4");
@@ -430,7 +585,87 @@ export default function App() {
   );
 }
 
-function ChatWorkspace({ chatModel, setChatModel, chatInput, setChatInput, chatImages, addChatImages, removeChatImage, chatMessages, sendChat, busy }) {
+function SettingsWorkspace({ baseUrl, setBaseUrl, apiKey, setApiKey, saveSettings, loadModels, models, busy }) {
+  return (
+    <View style={styles.workspace}>
+      <Text style={styles.label}>Grok2API 地址</Text>
+      <TextInput value={baseUrl} onChangeText={setBaseUrl} style={styles.input} autoCapitalize="none" placeholder="http://192.168.123.195:38695" />
+      <Text style={styles.label}>完整客户端 Key</Text>
+      <TextInput value={apiKey} onChangeText={setApiKey} style={styles.input} autoCapitalize="none" secureTextEntry placeholder="sk-..." />
+      <View style={styles.actions}>
+        <Pressable style={styles.primary} onPress={saveSettings}><Text style={styles.primaryText}>保存设置</Text></Pressable>
+        <Pressable style={styles.button} onPress={loadModels} disabled={busy}><Text style={styles.buttonText}>{busy ? "读取中..." : "获取模型"}</Text></Pressable>
+      </View>
+      <Text style={styles.hint}>已获取 {models.length} 个模型。获取模型后会按类型自动填入各功能页，也可以手动切换。</Text>
+    </View>
+  );
+}
+
+function PromptWorkspace({ workflow, workflowId, setWorkflowId, input, setInput, imageDataUrl, pickImage, runWorkflow, generatedPrompt, copyGeneratedToInput, chatModel, setChatModel, chatModelOptions, busy }) {
+  return (
+    <View style={styles.workspace}>
+      <View style={styles.toolGrid}>
+        {PROMPT_TOOLS.map((tool) => (
+          <Pressable key={tool.id} style={[styles.tool, workflowId === tool.id && styles.active]} onPress={() => setWorkflowId(tool.id)}>
+            <Text style={styles.toolTitle}>{tool.title}</Text>
+            <Text style={styles.toolHint}>{tool.hint}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.label}>{workflow.inputLabel}</Text>
+      <TextInput value={input} onChangeText={setInput} style={styles.textarea} multiline placeholder={workflow.placeholder} />
+      <ModelChips label="创作模型" value={chatModel} options={chatModelOptions} onChange={setChatModel} disabled={busy} />
+      <View style={styles.actions}>
+        {workflow.needsImage ? <Pressable style={styles.button} onPress={pickImage}><Text style={styles.buttonText}>参考图</Text></Pressable> : null}
+        <Pressable style={styles.primary} onPress={runWorkflow} disabled={busy}><Text style={styles.primaryText}>{busy ? "生成中..." : workflow.shortTitle}</Text></Pressable>
+      </View>
+      {workflow.needsImage && imageDataUrl ? <Image source={{ uri: imageDataUrl }} style={styles.preview} /> : null}
+      {generatedPrompt ? (
+        <View style={styles.resultBlock}>
+          <View style={styles.resultHead}>
+            <Text style={styles.resultTitle}>{workflow.outputLabel}</Text>
+            <Pressable style={styles.copyButton} onPress={copyGeneratedToInput}><Text style={styles.copyButtonText}>用于创作</Text></Pressable>
+          </View>
+          <Text selectable style={styles.resultText}>{generatedPrompt}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function MediaWorkspace({ mode, model, setModel, modelOptions, input, setInput, imageDataUrl, pickImage, create, busy, media }) {
+  const isVideo = mode === "video";
+  return (
+    <View style={styles.workspace}>
+      <ModelChips label={isVideo ? "视频模型" : "图片模型"} value={model} options={modelOptions} onChange={setModel} disabled={busy} />
+      <Text style={styles.label}>提示词</Text>
+      <TextInput value={input} onChangeText={setInput} style={styles.textarea} multiline placeholder={isVideo ? "描述视频画面、动作、镜头和节奏。" : "描述你的想法，生成图片 Prompt。"} />
+      <View style={styles.actions}>
+        <Pressable style={styles.button} onPress={pickImage}><Text style={styles.buttonText}>参考图</Text></Pressable>
+        <Pressable style={styles.primary} onPress={create} disabled={busy}><Text style={styles.primaryText}>{isVideo ? "生成视频" : "生成图片"}</Text></Pressable>
+      </View>
+      {imageDataUrl ? <Image source={{ uri: imageDataUrl }} style={styles.preview} /> : null}
+    </View>
+  );
+}
+
+function ModelChips({ label, value, options, onChange, disabled }) {
+  const list = Array.isArray(options) && options.length ? options : [value].filter(Boolean);
+  return (
+    <View style={styles.modelArea}>
+      <Text style={styles.label}>{label}</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modelChips}>
+        {list.map((item) => (
+          <Pressable key={item} style={[styles.choiceChip, value === item && styles.active]} onPress={() => onChange(item)} disabled={disabled}>
+            <Text style={styles.choiceChipText} numberOfLines={1}>{displayModelName(item)}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+function ChatWorkspace({ chatModel, setChatModel, chatModelOptions, chatInput, setChatInput, chatImages, addChatImages, removeChatImage, chatMessages, sendChat, busy }) {
   return (
     <View style={styles.chatArea}>
       <ScrollView style={styles.messages} contentContainerStyle={styles.messagesContent}>
@@ -466,9 +701,9 @@ function ChatWorkspace({ chatModel, setChatModel, chatInput, setChatInput, chatI
           </ScrollView>
         )}
         <TextInput value={chatInput} onChangeText={setChatInput} style={styles.chatInput} multiline placeholder="输入内容，或添加截图。" />
+        <ModelChips label="聊天模型" value={chatModel} options={chatModelOptions} onChange={setChatModel} disabled={busy} />
         <View style={styles.controlBar}>
           <Pressable style={styles.button} onPress={addChatImages}><Text style={styles.buttonText}>添加图片（{chatImages.length}/4）</Text></Pressable>
-          <TextInput value={chatModel} onChangeText={setChatModel} style={[styles.input, styles.modelInput]} autoCapitalize="none" placeholder="聊天模型" />
           <Pressable style={styles.primary} onPress={sendChat} disabled={busy}><Text style={styles.primaryText}>{busy ? "回复中..." : "发送"}</Text></Pressable>
         </View>
       </View>
@@ -529,7 +764,7 @@ function ResultBlock({ title, value, copied, onCopy }) {
   );
 }
 
-function VoiceWorkspace({ voiceMode, setVoiceMode, voiceModel, setVoiceModel, voiceList, voiceId, setVoiceId, voiceText, setVoiceText, voiceLanguage, setVoiceLanguage, voiceSynthesisText, voiceFile, pickAudio, transcript, synthesizeVoice, previewVoice, transcribeVoice, busy, voicePreviewBusy }) {
+function VoiceWorkspace({ voiceMode, setVoiceMode, voiceModel, setVoiceModel, voiceModelOptions, voiceList, voiceId, setVoiceId, voiceText, setVoiceText, voiceLanguage, setVoiceLanguage, voiceSynthesisText, voiceFile, pickAudio, transcript, synthesizeVoice, previewVoice, transcribeVoice, busy, voicePreviewBusy }) {
   const isTts = voiceMode === "tts";
   return <View style={styles.voiceArea}>
     <View style={styles.voiceModes}>
@@ -538,7 +773,7 @@ function VoiceWorkspace({ voiceMode, setVoiceMode, voiceModel, setVoiceModel, vo
     </View>
     {isTts ? <>
       <TextInput value={voiceText} onChangeText={setVoiceText} style={styles.textarea} multiline placeholder="输入要合成的文本。" />
-      <TextInput value={voiceModel} onChangeText={setVoiceModel} style={styles.input} autoCapitalize="none" />
+      <ModelChips label="语音模型" value={voiceModel} options={voiceModelOptions} onChange={setVoiceModel} disabled={busy} />
       <TextInput value={voiceLanguage} onChangeText={setVoiceLanguage} style={styles.input} autoCapitalize="none" placeholder="语言，例如 zh、en、ko、auto" />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.voiceChoices}>
         {voiceList.map((item) => <Pressable key={item.voice_id} style={[styles.button, voiceId === item.voice_id && styles.active]} onPress={() => setVoiceId(item.voice_id)}><Text>{item.name || item.voice_id}</Text></Pressable>)}
@@ -695,7 +930,13 @@ function inferMusicLanguage(input) {
   ];
   const matched = languages.find(([pattern]) => pattern.test(value));
   if (matched) return matched[1];
-  return "Mandarin Chinese (Simplified Chinese lyrics)";
+  const explicitLanguage = value.match(/(?:使用|用|以)\s*([^，。,.；;\n]{1,16}(?:语|語|文))\s*(?:写|寫|演唱|唱|创作|創作|歌词|歌詞)?/i)?.[1];
+  if (explicitLanguage) return `the language explicitly requested by the user (${explicitLanguage}), using its native writing system`;
+  if (/[\uac00-\ud7af]/.test(value)) return "Korean (native Hangul lyrics, not romanization)";
+  if (/[\u3040-\u30ff]/.test(value)) return "Japanese (native Kanji and Kana lyrics, not romaji)";
+  const chineseChars = (value.match(/[\u3400-\u9fff]/g) || []).length;
+  const latinWords = (value.match(/[a-z]+/gi) || []).length;
+  return chineseChars >= Math.max(2, latinWords) ? "Mandarin Chinese (Simplified Chinese lyrics)" : "English";
 }
 
 function buildMultimodalMessages(messages, mode) {
@@ -731,6 +972,51 @@ function extractTextResponse(data) {
   return parts.join("\n") || "接口没有返回文本";
 }
 
+function buildModelLists(models) {
+  const ids = models.length ? models.map(normalizeModelOption) : Object.values(DEFAULT_MODELS);
+  const chat = unique([...KNOWN_CHAT_MODELS, ...ids.filter((id) => /chat|grok-4|composer|build/i.test(id))]);
+  const image = unique([...KNOWN_IMAGE_MODELS, ...ids.filter((id) => /image/i.test(id) && !/edit/i.test(id))]);
+  const video = unique(ids.filter((id) => /video/i.test(id)));
+  const voice = unique([...KNOWN_VOICE_MODELS, ...ids.filter((id) => /voice/i.test(id) && !/edit/i.test(id))]);
+  return {
+    chat: chat.length ? chat : [DEFAULT_MODELS.chat],
+    image: image.length ? image : [DEFAULT_MODELS.image, DEFAULT_MODELS.imageQuality],
+    video: video.length ? video : [DEFAULT_MODELS.video],
+    voice: voice.length ? voice : [DEFAULT_MODELS.voice]
+  };
+}
+
+function normalizeModelOption(id) {
+  const value = String(id || "");
+  if (value === "Web/grok-imagine-image-2.0") return "grok-imagine-image-2.0";
+  if (value === "Web/grok-imagine-image") return "grok-imagine-image";
+  if (value === "Web/grok-imagine-image-quality") return "grok-imagine-image-quality";
+  if (value === "Web/grok-imagine-video") return "grok-imagine-video";
+  if (value.startsWith("Console/")) return value.slice("Console/".length);
+  if (value.startsWith("Build/")) return value.slice("Build/".length);
+  return value;
+}
+
+function pickChatModel(mapped) {
+  return mapped.find((id) => /grok-composer-2\.5-fast/i.test(id)) || mapped.find((id) => /grok-4\.5/i.test(id)) || mapped.find((id) => /chat/i.test(id));
+}
+
+function pickImageModel(mapped) {
+  return mapped.find((id) => /^grok-imagine-image$/i.test(id)) || mapped.find((id) => /image/i.test(id) && !/edit/i.test(id));
+}
+
+function pickVideoModel(mapped) {
+  return mapped.find((id) => /^grok-imagine-video$/i.test(id)) || mapped.find((id) => /video/i.test(id));
+}
+
+function pickVoiceModel(mapped) {
+  return mapped.find((id) => /^grok-voice-latest$/i.test(id)) || mapped.find((id) => /voice/i.test(id));
+}
+
+function unique(items) {
+  return Array.from(new Set(items.filter(Boolean)));
+}
+
 function displayModelName(id) {
   return String(id || "").replace(/^(Web|Console|Build)\//, "");
 }
@@ -746,20 +1032,22 @@ const styles = StyleSheet.create({
   tab: { height: 42, minWidth: 76, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1, borderColor: "#dfe3e8", alignItems: "center", justifyContent: "center", backgroundColor: "#fff" },
   active: { backgroundColor: "#edf1f5", borderColor: "#cbd3dd" },
   tabText: { color: "#232831", fontWeight: "600" },
+  status: { color: "#69707a" },
+  workspace: { gap: 12 },
   label: { color: "#69707a", marginTop: 4 },
+  hint: { color: "#9aa1ab", lineHeight: 19 },
   input: { minHeight: 46, backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8", borderRadius: 8, paddingHorizontal: 12 },
   toolGrid: { gap: 10 },
   tool: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#e2e6eb", borderRadius: 8, padding: 12 },
   toolTitle: { fontWeight: "700", color: "#15171c" },
   toolHint: { color: "#69707a", marginTop: 4, lineHeight: 19 },
-  textarea: { minHeight: 160, textAlignVertical: "top", backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8", borderRadius: 8, padding: 14 },
+  textarea: { minHeight: 150, textAlignVertical: "top", backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8", borderRadius: 8, padding: 14 },
   actions: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
   button: { height: 44, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff", justifyContent: "center" },
   buttonText: { color: "#22262d", fontWeight: "600" },
   primary: { height: 44, paddingHorizontal: 18, borderRadius: 8, backgroundColor: "#15171c", justifyContent: "center", alignItems: "center" },
   primaryText: { color: "#fff", fontWeight: "700" },
   loading: { marginTop: 4 },
-  status: { color: "#69707a" },
   preview: { width: 140, height: 140, borderRadius: 8, backgroundColor: "#e9edf2" },
   output: { width: "100%", aspectRatio: 1, borderRadius: 8, backgroundColor: "#e9edf2" },
   videoLink: { padding: 14, borderRadius: 8, backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8" },
@@ -785,7 +1073,6 @@ const styles = StyleSheet.create({
   composer: { gap: 10 },
   chatInput: { minHeight: 90, maxHeight: 150, textAlignVertical: "top", backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8", borderRadius: 8, padding: 12 },
   controlBar: { flexDirection: "row", gap: 8, alignItems: "center", flexWrap: "wrap" },
-  modelInput: { flex: 1, minWidth: 140, height: 44 },
   chatImagePreviews: { gap: 8, paddingVertical: 2 },
   chatImageWrap: { position: "relative" },
   chatImagePreview: { width: 72, height: 72, borderRadius: 8, backgroundColor: "#e9edf2" },
@@ -796,8 +1083,6 @@ const styles = StyleSheet.create({
   musicTitle: { fontSize: 18, fontWeight: "700", color: "#15171c" },
   musicHint: { color: "#69707a", lineHeight: 20 },
   musicChoices: { gap: 8 },
-  choiceChip: { height: 40, paddingHorizontal: 16, borderRadius: 20, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff", justifyContent: "center" },
-  choiceChipText: { color: "#22262d", fontWeight: "600" },
   musicLengthChoices: { gap: 8 },
   lengthCard: { minWidth: 110, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff" },
   lengthLabel: { fontWeight: "700", color: "#15171c" },
@@ -808,5 +1093,9 @@ const styles = StyleSheet.create({
   resultTitle: { fontWeight: "700", color: "#15171c", flex: 1, marginRight: 8 },
   copyButton: { height: 32, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff", justifyContent: "center" },
   copyButtonText: { color: "#22262d", fontWeight: "600", fontSize: 12 },
-  resultText: { color: "#22262d", lineHeight: 21 }
+  resultText: { color: "#22262d", lineHeight: 21 },
+  modelArea: { gap: 8 },
+  modelChips: { gap: 8, paddingVertical: 2 },
+  choiceChip: { height: 40, paddingHorizontal: 16, borderRadius: 20, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff", justifyContent: "center", maxWidth: 220 },
+  choiceChipText: { color: "#22262d", fontWeight: "600" }
 });

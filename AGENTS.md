@@ -185,3 +185,11 @@ docker logs --tail 20 grok-workbench-web
 - 构建产物：Android APK 构建成功（run 33268370792，约 65 MB），下载至本地 `dist-android/GrokWorkbench-v1.0.9-3.apk`；iOS 未签名 IPA 构建成功（run 33268807697，约 5.6 MB），下载至本地 `dist-ios/GrokWorkbench-v1.0.9-2-unsigned.ipa`。两者均已用归档结构校验（APK 含 classes.dex/lib，IPA 含 Payload/GrokWorkbench.app）。
 - 部署：本次没有替换任何服务器容器或镜像，Web 线上 1.0.9 保持不变；`grok-workbench-deploy.tgz` 与 `dist-*` 已加入 `.gitignore`，不进入仓库。
 - 遗留：移动端功能补齐未做真实设备上的图片选择/多模态请求联调，依赖用户安装 APK/IPA 后使用真实客户端 Key 验证；iOS IPA 未签名，需侧载（如 AltStore）或后续签名。
+
+### 2026-08-30：移动端补齐提示词页、设置页与逐项模型选择（进行中）
+
+- 状态：进行中。
+- 目标：按用户反馈补齐移动端缺失的“提示词”页签（图片还原/文字扩写/影视制作全案）与“设置”页签（API 地址、客户端 Key、获取模型按钮），并让聊天/图片/视频/语音/音乐每一项都能手动选择模型。
+- 版本：保持 `1.0.9`，只改移动端与 CI 产物，不动 Web 线上。
+- 范围：`apps/mobile/App.js`、`apps/mobile/package.json`、根 `package-lock.json`、AGENTS.md。
+- 当前进度：正在重写移动端导航与工作区，加入 AsyncStorage 持久化设置与模型列表。
