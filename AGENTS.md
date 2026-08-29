@@ -172,11 +172,16 @@ docker logs --tail 20 grok-workbench-web
 - 一致性：本地与服务器 `/opt/grok-workbench` 的 `main.jsx`、`styles.css`、根 `package.json` 和根 `package-lock.json` SHA256 完全一致，版本元数据统一为 `1.0.9`。
 - 回滚点：`web-grok-workbench-web:1.0.8-before-music-quality`，镜像 ID `sha256:28abe8dbb4097fee63ed5c793f6d17b940000b71c5ac80e0c3ecd742fdfb4022`；备份目录 `/opt/grok-workbench/backups/1.0.8-before-music-quality-20260821`。
 
-### 2026-08-30：重建 GitHub 仓库并补全移动端对齐 Web 1.0.9（进行中）
+### 2026-08-30：重建 GitHub 仓库并补全移动端对齐 Web 1.0.9
 
-- 状态：进行中。
-- 目标：按方案 1 重建 `chenweitian423/grok-workbench-mobile` 公共仓库，将移动端功能对齐 Web 1.0.9（补齐音乐页、聊天图片多模态），并通过 GitHub Actions 产出 Android APK 与未签名 iOS IPA。
-- 预期版本：移动端继续使用 `1.0.9`（与 Web 版本一致，本次属于移动端功能补齐，不改变 Web 线上行为）。
-- 范围：`apps/mobile/App.js`、`apps/mobile/app.json`、`apps/mobile/package.json`、根 `package-lock.json`、`.github/workflows`、AGENTS.md；不修改 Web `main.jsx`、不部署线上 Web 容器。
-- 风险：移动端当前没有真实聊天页、没有音乐页、没有聊天图片；移动端访问 `http://192.168.123.195:38695` 需要明文 HTTP 配置；本机无 Android SDK 且 Windows 无法构建 iOS，必须依赖 GitHub Actions。
-- 当前进度：仓库已重建（`https://github.com/chenweitian423/grok-workbench-mobile`），本地 remote 已指向该 URL；移动端 App.js 正在补齐音乐与聊天图片。
+- 状态：已完成。
+- 目标：按方案 1 重建 `chenweitian423/grok-workbench-mobile` 公共仓库，将移动端功能对齐 Web 1.0.9（补齐真实聊天页、聊天图片多模态、音乐页），并通过 GitHub Actions 产出 Android APK 与未签名 iOS IPA。
+- 版本：移动端与 Web 保持一致 `1.0.9`；本次只改移动端与 CI，不修改 Web `main.jsx`、不部署线上 Web 容器。
+- 仓库：已重建并推送 `https://github.com/chenweitian423/grok-workbench-mobile`（public），本地 remote 指向该 URL，基线提交 `776c2f5`。
+- 移动端改动：`apps/mobile/App.js` 新增聊天页（消息历史、聊天模型输入、最多 4 张图片多选、预览删除、`text+image_url` / `input_text+input_image` 多模态发送）；新增音乐页（grok-4.5 / grok-4.6 / grok-chat-fast 模型选择、短歌/标准/长歌模式、歌词密度校验与自动重写、时长归一化、四段结果复制，逻辑与 Web 1.0.9 一致）。
+- 配置改动：`app.json` 增加 Android `usesCleartextTraffic: true` 与 iOS `NSAllowsArbitraryLoads: true`，保证能访问 `http://192.168.123.195:38695`；`package.json` 增加 `expo-clipboard ~7.0.1`。
+- 事故与修复：CI 首次 Android 构建失败，根因是 `expo-document-picker ^13.0.2`、`expo-image-picker ^16.0.3`、`expo-status-bar ^2.0.1` 的 caret 范围解析到更新 SDK 的版本（13.1.6 / 16.1.4 / 2.2.3），与 Expo 52 的 `expo-modules-core` 不兼容（`expo-module-gradle-plugin` 找不到、`release` component 属性缺失）。已全部改为 Expo 52 配套版本 `~13.0.3 / ~16.0.6 / ~2.0.1`；同时修复 `android-apk.yml` 与 `web-build.yml` 中读取版本号的 shell 转义问题。
+- 验证：本地 `npm run build:web` 通过（1577 模块）；`npx expo export --platform android` 通过（581 模块）；`npx expo config --type public` 确认明文 HTTP 配置生效。
+- 构建产物：Android APK 构建成功（run 33268370792，约 65 MB），下载至本地 `dist-android/GrokWorkbench-v1.0.9-3.apk`；iOS 未签名 IPA 构建成功（run 33268807697，约 5.6 MB），下载至本地 `dist-ios/GrokWorkbench-v1.0.9-2-unsigned.ipa`。两者均已用归档结构校验（APK 含 classes.dex/lib，IPA 含 Payload/GrokWorkbench.app）。
+- 部署：本次没有替换任何服务器容器或镜像，Web 线上 1.0.9 保持不变；`grok-workbench-deploy.tgz` 与 `dist-*` 已加入 `.gitignore`，不进入仓库。
+- 遗留：移动端功能补齐未做真实设备上的图片选择/多模态请求联调，依赖用户安装 APK/IPA 后使用真实客户端 Key 验证；iOS IPA 未签名，需侧载（如 AltStore）或后续签名。
