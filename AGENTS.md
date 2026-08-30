@@ -351,3 +351,23 @@ docker logs --tail 20 grok-workbench-web
   - Web 端 `/library` 只从 auth.json 返回，该图从未入库，所以 Web 端同样没有；不是 Web 端单独 bug，是同一归属失败根因。
 - 待确认：真实图片生成接口的响应 JSON 结构（参考 Grok2API 开源仓库 `chenyme/grok2api` 的 `/v1/images/generations` handler 或实际打一次请求）；最近一条视频在 `media_jobs` 表里的实际 prompt/模型/状态。
 - 风险：历史已落盘但未归属的图片回填涉及归属歧义，需用户确认策略后再执行；真实模型调用可能消耗额度。
+
+### 2026-08-30：修复移动端资产归属并恢复未同步图库条目（1.0.14）
+
+- 状态：已完成。
+- 目标：修复“移动端生成的图片/视频在磁盘存在但移动端与 Web 图库都同步不到”的归属链路；确认最近一条视频后端实际收到的提示词。
+- 版本：全仓统一 `1.0.14`（根/Web/移动端/core/锁文件/`APP_VERSION`/`app.json`/versionCode 10014）。Web 已重新构建并部署。
+- 根因（已用 Grok2API 开源仓库源码确认）：
+  - Grok2API 图片生成返回 `{"created":..., "data":[{"url":".../v1/media/images/img_xxx","mime_type":"image/jpeg","revised_prompt":""}]}`，条目只有 `url`、没有 `id` 字段；视频完成态返回 `{"status":"done","video":{"url":".../v1/media/videos/vid_xxx",...}}`，同样只有 URL。
+  - 移动端 `extractMobileMediaItems` 在条目没有 id 字段时把 `id` 设为整串 URL，`claimToServer` 用 `/^(img|vid)_...$/` 正则过滤，URL 形式的 id 全部被跳过 → 移动端生成的资产从未归属到工作台账号 → Web `/library`（只读 auth.json）和移动端“同步我的图库”都拿不到。
+  - 数据库/磁盘证据：`img_2aPlDe-lXqKnh0vvfKRwPUg2trdm7Fjr`（12:00，sky key，IP .127）与 `img_1ihOwOpz...`（10:48）磁盘存在但 auth.json 无记录；最新视频 `vid__mCTgCJrV2PXek8C1lwZ_PyTL8sSvdj8`（12:37，提示词“美女穿黑丝跳钢管舞”）同样未归属。Web 端走服务器代理自动 claim（`extractAssetIds` 全量递归），所以 Web 生成的资产正常。
+- 完成内容：
+  - 移动端 `extractMobileMediaItems`：新增 `data.asset/result_asset/resultAsset` 与 `result_asset_id/resultAssetId` 分支；当条目只有 URL 时从 URL 提取裸 `img_/vid_` id（新增 `extractMobileAssetId`），保证 id 始终是裸资产 id；`claimToServer` 对 id 为 URL 的情况也能容错提取并去重。
+  - core `extractMediaItems`：同步补提裸 id（Web 展示一致性，低风险）。
+  - 服务器 `extractAssetIds`：id 字段值为 URL 时也能提取 `img_/vid_`（客户端兜底安全网）；`serveLibrary` 的“最近未归属资产找回”从只处理视频扩展到图片也处理（6 小时窗口、每次最多 3 条，与既有视频行为一致）。
+  - 历史恢复：由于 `/library` 现在会自动找回最近 6 小时内的未归属资产，sky 账号下次打开 Web 图库或移动端“同步我的图库”时，`img_2aPlDe`、`img_1ihOwOpz`、`vid__mCTg...` 会自动归属到该账号（已用隔离环境验证该机制：临时媒体目录 + 临时 auth.json + 临时端口 38698，注册测试账号读取 `/library` 后两个测试资产均被认领并返回）。
+- 视频提示词结论：`media_jobs` 与 `request_audits` 确认 12:37 视频后端实际收到的 prompt 就是“美女穿黑丝跳钢管舞”（sky key、IP .127、grok-imagine-video、6s/16:9/720p，result `vid__mCTg...`），且移动端 1.0.13 已修复 generatedPrompt 覆盖问题；若视频画面与提示词无关，根因在上游模型/账号（egress 节点“奶昔”，账号 Grok Web 43cf677a），不是移动端发送错误提示词。本环境图片查看工具不可用，未能直接抽帧复核视频画面。
+- 验证：本地 `npm run build:web` 通过（1577 模块）；`npx expo export --platform android` 通过；隔离环境端到端验证通过；候选镜像在 38697 验证首页 200、`/auth/me` 200、匿名 `/library` 401、JS 含 1.0.14 与音乐/聊天图片/参考图/视频库/实际发送/影视方案/语音标记。
+- 部署：线上已更新为 1.0.14，镜像 `sha256:dcbe2acb1aacc2242692deafe1600600b8c0bcec9c04be273478d823d4383fc4`（标签 `web-grok-workbench-web:latest`、`web-grok-workbench-web:1.0.14-candidate`）；回滚标签 `web-grok-workbench-web:1.0.13-before-mobile-claim-fix`（镜像 `d857c8212535`）；源码备份 `/opt/grok-workbench/backups/1.0.13-before-mobile-claim-fix-20260830/`。线上首页 200、`/auth/me` 200、匿名 `/library` 401、数据卷继续挂载 `grok2api_grok2api-data:/grok2api-data:ro` 与 `web_grok-workbench-data:/app/data`，日志正常。
+- CI 与产物：Web run 33312632319 成功；Android run 33312632305 成功，APK `dist-android/GrokWorkbench-v1.0.14-12.apk`（约 65 MB，含 classes.dex/lib，结构校验通过）；iOS run 33312789872（手动触发）构建完成后下载 IPA；旧 v1.0.13-11 APK 已移入 `dist-android/旧版本/`。
+- 遗留：① sky 账号需要打开一次 Web 图库或移动端“同步我的图库”触发历史找回（自动归属最近 6 小时内的 3 条未归属资产）；② 更早的未归属资产（本次扫描 disk 上图片未归属 77 条、视频 1 条，跨度到 8-21）不会自动归属，如需按账号回填需确认归属策略后写脚本；③ 视频画面与提示词无关属上游模型问题，建议换个 egress 账号/节点或换提示词再测。
