@@ -13,7 +13,7 @@ import { DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, PROMPT_
 
 const SETTINGS_KEY = "grok-workbench-mobile-settings";
 const GALLERY_KEY = "grok-workbench-mobile-gallery";
-const MOBILE_APP_VERSION = "1.0.11";
+const MOBILE_APP_VERSION = "1.0.12";
 const DEFAULT_WORKBENCH_BASE_URL = "http://192.168.123.195:38696";
 
 const TABS = [
@@ -136,6 +136,7 @@ export default function App() {
   const [videoModel, setVideoModel] = useState(DEFAULT_MODELS.video);
   const [voiceModel, setVoiceModel] = useState(DEFAULT_MODELS.voice);
   const [musicModel, setMusicModel] = useState("grok-4.5");
+  const [imageParams, setImageParams] = useState({ count: 1, aspectRatio: "1:1", resolution: "1k" });
   const [gallery, setGallery] = useState([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [previewItem, setPreviewItem] = useState(null);
@@ -475,7 +476,7 @@ export default function App() {
         prompt = `${originalPrompt}\n\n参考图视觉约束（在不冲突时保持）：\n${referenceDescription}`;
         setStatus("参考图分析完成，正在生成图片");
       }
-      const data = await api.generateImage({ prompt, model: imageModel });
+      const data = await api.generateImage({ prompt, model: imageModel, ...imageParams });
       const items = extractMobileMediaItems(data, baseUrl, "image");
       setMedia(items);
       addToGallery(items, { prompt, model: imageModel });
@@ -798,6 +799,8 @@ export default function App() {
           create={mode === "video" ? createVideo : createImage}
           busy={busy}
           media={media}
+          imageParams={imageParams}
+          setImageParams={setImageParams}
         />
       )}
 
@@ -878,6 +881,21 @@ function SettingsWorkspace({ baseUrl, setBaseUrl, apiKey, setApiKey, wbBaseUrl, 
 }
 
 function PromptWorkspace({ workflow, workflowId, setWorkflowId, input, setInput, imageDataUrl, pickImage, runWorkflow, generatedPrompt, copyGeneratedToInput, chatModel, setChatModel, chatModelOptions, busy }) {
+  const [copiedPrompt, setCopiedPrompt] = useState("");
+  const sections = useMemo(() => splitPromptSections(generatedPrompt), [generatedPrompt]);
+
+  async function copyPromptSection(index, body) {
+    await Clipboard.setStringAsync(String(body ?? ""));
+    setCopiedPrompt(`section-${index}`);
+    setTimeout(() => setCopiedPrompt((current) => current === `section-${index}` ? "" : current), 1600);
+  }
+
+  async function copyPromptAll() {
+    await Clipboard.setStringAsync(String(generatedPrompt ?? ""));
+    setCopiedPrompt("all");
+    setTimeout(() => setCopiedPrompt((current) => current === "all" ? "" : current), 1600);
+  }
+
   return (
     <View style={styles.workspace}>
       <View style={styles.toolGrid}>
@@ -897,30 +915,60 @@ function PromptWorkspace({ workflow, workflowId, setWorkflowId, input, setInput,
       </View>
       {workflow.needsImage && imageDataUrl ? <Image source={{ uri: imageDataUrl }} style={styles.preview} /> : null}
       {generatedPrompt ? (
-        <View style={styles.resultBlock}>
-          <View style={styles.resultHead}>
-            <Text style={styles.resultTitle}>{workflow.outputLabel}</Text>
-            <Pressable style={styles.copyButton} onPress={copyGeneratedToInput}><Text style={styles.copyButtonText}>用于创作</Text></Pressable>
+        <View style={styles.promptOutputs}>
+          <View style={styles.actions}>
+            <Pressable style={styles.primary} onPress={copyGeneratedToInput}><Text style={styles.primaryText}>用于创作</Text></Pressable>
+            <Pressable style={styles.button} onPress={copyPromptAll}><Text style={styles.buttonText}>{copiedPrompt === "all" ? "已复制" : "复制全部"}</Text></Pressable>
           </View>
-          <Text selectable style={styles.resultText}>{generatedPrompt}</Text>
+          {sections.map((section, index) => (
+            <ResultBlock
+              key={`${index}-${section.title}`}
+              title={section.title || `段落 ${index + 1}`}
+              value={section.body}
+              copied={copiedPrompt === `section-${index}`}
+              onCopy={() => copyPromptSection(index, section.body)}
+            />
+          ))}
         </View>
       ) : null}
     </View>
   );
 }
 
-function MediaWorkspace({ mode, model, setModel, modelOptions, input, setInput, imageDataUrl, pickImage, create, busy, media }) {
+function MediaWorkspace({ mode, model, setModel, modelOptions, input, setInput, imageDataUrl, pickImage, create, busy, media, imageParams, setImageParams }) {
   const isVideo = mode === "video";
   return (
     <View style={styles.workspace}>
       <ModelChips label={isVideo ? "视频模型" : "图片模型"} value={model} options={modelOptions} onChange={setModel} disabled={busy} />
       <Text style={styles.label}>提示词</Text>
       <TextInput value={input} onChangeText={setInput} style={styles.textarea} multiline placeholder={isVideo ? "描述视频画面、动作、镜头和节奏。" : "描述你的想法，生成图片 Prompt。"} />
+      {!isVideo ? (
+        <>
+          <ParamChips label="数量" value={imageParams.count} options={[1, 2, 4]} format={(item) => `${item}x`} onChange={(item) => setImageParams({ ...imageParams, count: item })} disabled={busy} />
+          <ParamChips label="图片比例" value={imageParams.aspectRatio} options={["1:1", "16:9", "9:16", "4:3", "3:4"]} onChange={(item) => setImageParams({ ...imageParams, aspectRatio: item })} disabled={busy} />
+          <ParamChips label="分辨率" value={imageParams.resolution} options={["1k", "2k"]} onChange={(item) => setImageParams({ ...imageParams, resolution: item })} disabled={busy} />
+        </>
+      ) : null}
       <View style={styles.actions}>
         <Pressable style={styles.button} onPress={pickImage}><Text style={styles.buttonText}>参考图</Text></Pressable>
         <Pressable style={styles.primary} onPress={create} disabled={busy}><Text style={styles.primaryText}>{isVideo ? "生成视频" : "生成图片"}</Text></Pressable>
       </View>
       {imageDataUrl ? <Image source={{ uri: imageDataUrl }} style={styles.preview} /> : null}
+    </View>
+  );
+}
+
+function ParamChips({ label, value, options, onChange, disabled, format }) {
+  return (
+    <View style={styles.modelArea}>
+      <Text style={styles.label}>{label}</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modelChips}>
+        {options.map((item) => (
+          <Pressable key={String(item)} style={[styles.choiceChip, value === item && styles.active]} onPress={() => onChange(item)} disabled={disabled}>
+            <Text style={styles.choiceChipText}>{format ? format(item) : String(item)}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
     </View>
   );
 }
@@ -1499,6 +1547,45 @@ function displayModelName(id) {
   return String(id || "").replace(/^(Web|Console|Build)\//, "");
 }
 
+function splitPromptSections(text) {
+  const value = String(text || "").trim();
+  if (!value) return [];
+  const lines = value.split(/\r?\n/);
+  const sections = [];
+  let current = null;
+  let headerCount = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const header = trimmed.match(/^(?:#{1,6}\s*|\*\s*|-\s*)?(?:\*\*)?([^*]{1,40}?)(?:\*\*)?[:：](?:\*\*)?\s*$/);
+    if (header) {
+      headerCount += 1;
+      current = { title: header[1].replace(/^[*#\-\s]+/, "").trim(), lines: [] };
+      sections.push(current);
+    } else if (trimmed) {
+      if (!current) {
+        current = { title: "", lines: [] };
+        sections.push(current);
+      }
+      current.lines.push(line);
+    } else if (current && current.lines.length) {
+      current.lines.push("");
+    }
+  }
+  if (!headerCount && sections.length <= 1) {
+    return value
+      .split(/\n\s*\n/)
+      .map((body, index) => ({ title: "", body: body.trim() }))
+      .filter((section) => section.body)
+      .map((section, index, all) => ({ ...section, title: all.length > 1 ? `段落 ${index + 1}` : "" }));
+  }
+  return sections
+    .map((section, index) => ({
+      title: section.title || (sections.length > 1 ? `段落 ${index + 1}` : ""),
+      body: section.lines.join("\n").replace(/\n{3,}/g, "\n\n").trim()
+    }))
+    .filter((section) => section.body);
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#f7f8f8" },
   content: { padding: 18, gap: 14 },
@@ -1567,6 +1654,7 @@ const styles = StyleSheet.create({
   lengthLabel: { fontWeight: "700", color: "#15171c" },
   lengthDuration: { color: "#69707a", marginTop: 2, fontSize: 12 },
   musicOutputs: { gap: 10 },
+  promptOutputs: { gap: 10 },
   resultBlock: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#e2e6eb", borderRadius: 10, padding: 12 },
   resultHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
   resultTitle: { fontWeight: "700", color: "#15171c", flex: 1, marginRight: 8 },

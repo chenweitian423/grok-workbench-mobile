@@ -288,3 +288,12 @@ docker logs --tail 20 grok-workbench-web
   - 清理：删除被取代的 v1.0.10 三条构建记录，GitHub 仅保留最新 Web（33294237212）/ Android v1.0.11-9 / iOS v1.0.11-6。
 - 部署状态：Web 线上已更新为 1.0.11（镜像 `c85a5f67ad9c`）；回滚标签 `web-grok-workbench-web:1.0.9-before-accounts`（镜像 `87e62551a45c`）；源码备份 `/opt/grok-workbench/backups/1.0.9-before-accounts-20260830/`（含旧 server.mjs 与测试前 auth.json）。
 - 遗留：真实设备验证重点：① 设置页用与 Web 端相同的账号登录后，“同步我的图库”能拉到自己的历史；② 换账号登录不会看到别人的图库；③ iOS 下载能直接存相册（首次弹权限）；④ 手机在外网时需把工作台（38696）也暴露到公网，或在设置里填工作台公网地址。
+
+### 2026-08-30：移动端图片参数对齐 Web 与提示词分段复制（进行中）
+
+- 状态：进行中。
+- 目标：① 移动端图片生成界面补齐 Web 端的图片数量（1x/2x/4x）、比例（1:1/16:9/9:16/4:3/3:4）、分辨率（1k/2k）参数；② 提示词功能生成结果按段落展示，每段可单独复制。
+- 预期版本：全仓统一 `1.0.12`；按版本规则不允许混用版本，Web 需重新构建并部署以同步版本号（server.mjs 无逻辑变化，走标准候选镜像流程，风险低）。
+- 范围：`apps/mobile/App.js`、版本元数据（根/Web/移动端/core/锁文件/`APP_VERSION`/`app.json`/`MOBILE_APP_VERSION`）、AGENTS.md；Web 容器需重新部署。
+- 风险：提示词输出格式由模型决定，分段解析采用“短行标题冒号”识别 + 空行分段兜底，可能无法完美匹配所有模型输出；真实设备需验证生成参数是否生效、分段复制是否好用。
+- 已完成侦察：Web `main.jsx` 数量 `[1,2,4]`（显示 1x/2x/4x）、比例 `["1:1","16:9","9:16","4:3","3:4"]`、分辨率 `["1k","2k"]`，默认 `{count:1, aspectRatio:"1:1", resolution:"1k"}`；`packages/core` 的 `generateImage` 已原生支持 `n/aspect_ratio/resolution`，无需改 core；移动端 `createImage` 未传这些参数，`PromptWorkspace` 整段展示无分段复制，已有 `ResultBlock` 组件可复用。
