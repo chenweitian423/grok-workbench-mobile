@@ -221,3 +221,19 @@ docker logs --tail 20 grok-workbench-web
 - 版本：保持 `1.0.9`，只改移动端与 CI 产物，不动 Web 线上。
 - 侦察结论：Grok2API 媒体读取接口为 `GET /v1/media/images/{id}`（图片，无需鉴权）与 `GET /v1/media/videos/{id}`（视频）；生成接口返回的 url 形如 `http://127.0.0.1:8000/v1/media/images/xxx`；历史列表仅有管理端接口 `/api/admin/v1/media/images|videos?page=&pageSize=`（需管理员权限，普通客户端 Key 可能 401）。
 - 范围：`apps/mobile/App.js`、`apps/mobile/package.json`、根 `package-lock.json`、AGENTS.md；新增 `expo-file-system ~18.0.12` 与 `expo-sharing ~13.0.1` 用于下载/分享媒体。
+
+### 2026-08-30：移动端修复生成图片显示并新增图库
+
+- 状态：已完成。
+- 目标：修复移动端生成图片无法显示（媒体 URL 被解析成 Web 专属 `/asset/` 路径），并新增图库页展示历史图片/视频、支持打开与下载。
+- 版本：保持 `1.0.9`，只改移动端与 CI 产物，未动 Web 线上。
+- 根因：`packages/core` 的 `extractMediaItems` 在有 asset id 时优先生成 `/asset/xxx`（Web server 专属路由，需登录+归属），移动端直接连 Grok2API 无法访问；Grok2API 实际媒体读取路径是 `/v1/media/images/{id}` / `/v1/media/videos/{id}`（图片无需鉴权可读）。
+- 完成内容：
+  - 移动端自实现 `extractMobileMediaItems`：优先使用 Grok2API 返回的原始 url（`/v1/media/...`），并把 `127.0.0.1` / `localhost` / `host.docker.internal` 主机替换为设置里的 Grok2API 地址；有 asset id 时构造 `/v1/media/images|videos/{id}`。
+  - 新增“图库”页签：自动记录本机生成的图片/视频（AsyncStorage 持久化，最多 300 条）；提供“同步服务器媒体”（尝试调用 Grok2API 管理端列表接口，客户端 Key 有权限则拉取全部历史，无权限仅提示本机记录）；图片网格缩略图 + 点击全屏预览 Modal；视频卡片可播放/下载；图片与视频均支持下载（expo-file-system 下载到缓存目录 + expo-sharing 调起系统保存/分享）。
+  - 生成图片/视频成功后自动写入图库。
+- 依赖：新增 `expo-file-system ~18.0.12`、`expo-sharing ~13.0.1`（Expo 52 配套版本；SDK 52 的 expo-file-system 主入口即旧 API，无需 `/legacy` 子路径）。
+- 验证：本地 `npx expo export --platform android` 通过；`npm run build:web` 通过，Web 基线未变。
+- 构建产物：Android run 33292012524 成功，`dist-android/GrokWorkbench-v1.0.9-7.apk`；iOS run 33292016047 成功，`dist-ios/GrokWorkbench-v1.0.9-4-unsigned.ipa`；旧版安装包已移入各自 `旧版本/` 子目录。
+- 清理：删除被取代的旧构建记录（Android v6、iOS v3、旧 Web），GitHub 仅保留最新 Web / Android v7 / iOS v4 三条。
+- 遗留：图库的“同步服务器媒体”依赖客户端 Key 是否拥有 Grok2API 管理权限；若 401 则只能显示本机生成记录（本机记录已覆盖移动端自己的生成历史）。真实设备验证仍建议重点检查：生成后立即显示、图库缩略图、点击大图、下载保存。
