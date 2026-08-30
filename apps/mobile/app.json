@@ -2,14 +2,14 @@
   "expo": {
     "name": "Grok Workbench",
     "slug": "grok-workbench",
-    "version": "1.0.10",
+    "version": "1.0.11",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "cn.sky423.grokworkbench",
-      "buildNumber": "1.0.10",
+      "buildNumber": "1.0.11",
       "supportsTablet": true,
       "infoPlist": {
         "NSAppTransportSecurity": {
@@ -20,7 +20,7 @@
     },
     "android": {
       "package": "cn.sky423.grokworkbench",
-      "versionCode": 10010,
+      "versionCode": 10011,
       "usesCleartextTraffic": true,
       "permissions": [
         "WRITE_EXTERNAL_STORAGE"

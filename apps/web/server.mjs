@@ -114,7 +114,7 @@ function publicUser(user) {
 }
 
 async function getSessionUser(req) {
-  const token = parseCookies(req).gw_session;
+  const token = getRequestToken(req) || parseCookies(req).gw_session;
   if (!token) return null;
   const db = await readAuthDb();
   const now = Date.now();
@@ -122,6 +122,12 @@ async function getSessionUser(req) {
   if (!session) return null;
   const user = db.users.find((item) => item.id === session.userId);
   return user ? { user, db, token } : null;
+}
+
+function getRequestToken(req) {
+  const header = String(req.headers.authorization || req.headers["x-gw-token"] || "");
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  return (match ? match[1] : header).trim() || null;
 }
 
 async function requireUser(req, res) {
@@ -144,7 +150,7 @@ async function handleAuth(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/auth/logout") {
-    const token = parseCookies(req).gw_session;
+    const token = getRequestToken(req) || parseCookies(req).gw_session;
     const db = await readAuthDb();
     db.sessions = db.sessions.filter((item) => item.token !== token);
     await writeAuthDb(db);
@@ -188,7 +194,7 @@ async function handleAuth(req, res) {
   db.sessions = db.sessions.filter((item) => item.expiresAt > Date.now());
   db.sessions.push({ token, userId: user.id, createdAt: Date.now(), expiresAt: Date.now() + sessionMaxAge * 1000 });
   await writeAuthDb(db);
-  sendJson(res, 200, { user: publicUser(user) }, { "Set-Cookie": sessionCookie(token) });
+  sendJson(res, 200, { user: publicUser(user), token }, { "Set-Cookie": sessionCookie(token) });
 }
 
 function extractAssetIds(data) {

@@ -13,7 +13,8 @@ import { DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, PROMPT_
 
 const SETTINGS_KEY = "grok-workbench-mobile-settings";
 const GALLERY_KEY = "grok-workbench-mobile-gallery";
-const MOBILE_APP_VERSION = "1.0.10";
+const MOBILE_APP_VERSION = "1.0.11";
+const DEFAULT_WORKBENCH_BASE_URL = "http://192.168.123.195:38696";
 
 const TABS = [
   { id: "prompt", label: "提示词" },
@@ -98,10 +99,11 @@ const MUSIC_LENGTH_PROFILES = {
 export default function App() {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_SERVER_BASE_URL);
   const [apiKey, setApiKey] = useState("");
-  const [adminUser, setAdminUser] = useState("");
-  const [adminPass, setAdminPass] = useState("");
-  const [adminToken, setAdminToken] = useState("");
-  const [adminTokenExpiresAt, setAdminTokenExpiresAt] = useState("");
+  const [wbBaseUrl, setWbBaseUrl] = useState(DEFAULT_WORKBENCH_BASE_URL);
+  const [wbToken, setWbToken] = useState("");
+  const [wbUser, setWbUser] = useState(null);
+  const [wbUsername, setWbUsername] = useState("");
+  const [wbPassword, setWbPassword] = useState("");
   const [models, setModels] = useState([]);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [mode, setMode] = useState("prompt");
@@ -154,10 +156,10 @@ export default function App() {
           const saved = JSON.parse(raw);
           if (saved.baseUrl) setBaseUrl(saved.baseUrl);
           if (saved.apiKey) setApiKey(saved.apiKey);
-          if (saved.adminUser) setAdminUser(saved.adminUser);
-          if (saved.adminPass) setAdminPass(saved.adminPass);
-          if (saved.adminToken) setAdminToken(saved.adminToken);
-          if (saved.adminTokenExpiresAt) setAdminTokenExpiresAt(saved.adminTokenExpiresAt);
+          if (saved.wbBaseUrl) setWbBaseUrl(saved.wbBaseUrl);
+          if (saved.wbToken) setWbToken(saved.wbToken);
+          if (saved.wbUser) setWbUser(saved.wbUser);
+          if (saved.wbUsername) setWbUsername(saved.wbUsername);
           if (Array.isArray(saved.models) && saved.models.length) setModels(saved.models);
         }
       } catch {}
@@ -176,8 +178,8 @@ export default function App() {
 
   useEffect(() => {
     if (!settingsLoaded) return undefined;
-    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey, models, adminUser, adminPass, adminToken, adminTokenExpiresAt })).catch(() => {});
-  }, [settingsLoaded, baseUrl, apiKey, models, adminUser, adminPass, adminToken, adminTokenExpiresAt]);
+    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey, models, wbBaseUrl, wbToken, wbUser, wbUsername })).catch(() => {});
+  }, [settingsLoaded, baseUrl, apiKey, models, wbBaseUrl, wbToken, wbUser, wbUsername]);
 
   useEffect(() => {
     AsyncStorage.setItem(GALLERY_KEY, JSON.stringify(gallery)).catch(() => {});
@@ -205,11 +207,90 @@ export default function App() {
 
   async function saveSettings() {
     try {
-      await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey, models, adminUser, adminPass, adminToken, adminTokenExpiresAt }));
+      await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey, models, wbBaseUrl, wbToken, wbUser, wbUsername }));
       setStatus("设置已保存");
     } catch (error) {
       setStatus(`保存失败：${error.message}`);
     }
+  }
+
+  function wbAuthHeaders() {
+    return wbToken ? { Authorization: `Bearer ${wbToken}` } : {};
+  }
+
+  async function wbLogin() {
+    if (!wbUsername.trim() || !wbPassword) return setStatus("请输入工作台账号和密码");
+    setBusy(true);
+    try {
+      const data = await rawJsonRequest(`${cleanBaseUrl(wbBaseUrl)}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: wbUsername.trim(), password: wbPassword })
+      });
+      if (!data?.token) throw new Error("登录接口未返回令牌");
+      setWbToken(data.token);
+      setWbUser(data.user || { username: wbUsername.trim() });
+      setWbPassword("");
+      setStatus(`已登录：${data.user?.username || wbUsername.trim()}，可在图库同步你的历史`);
+    } catch (error) {
+      setStatus(`登录失败：${error.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function wbRegister() {
+    if (!wbUsername.trim() || !wbPassword) return setStatus("请输入工作台账号和密码");
+    setBusy(true);
+    try {
+      const data = await rawJsonRequest(`${cleanBaseUrl(wbBaseUrl)}/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: wbUsername.trim(), password: wbPassword })
+      });
+      if (!data?.token) throw new Error("注册接口未返回令牌");
+      setWbToken(data.token);
+      setWbUser(data.user || { username: wbUsername.trim() });
+      setWbPassword("");
+      setStatus(`注册成功，已登录：${data.user?.username || wbUsername.trim()}`);
+    } catch (error) {
+      setStatus(`注册失败：${error.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function wbLogout() {
+    try {
+      await rawJsonRequest(`${cleanBaseUrl(wbBaseUrl)}/auth/logout`, {
+        method: "POST",
+        headers: wbAuthHeaders()
+      });
+    } catch {}
+    setWbToken("");
+    setWbUser(null);
+    setWbPassword("");
+    setStatus("已退出登录");
+  }
+
+  async function claimToServer(items, meta = {}) {
+    if (!wbToken || !Array.isArray(items) || !items.length) return;
+    const valid = items
+      .map((item) => String(item?.id || ""))
+      .filter((id) => /^(img|vid)_[A-Za-z0-9._-]+$/.test(id));
+    if (!valid.length) return;
+    try {
+      await rawJsonRequest(`${cleanBaseUrl(wbBaseUrl)}/ownership/claim`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...wbAuthHeaders() },
+        body: JSON.stringify({
+          items: valid.map((id) => ({ id })),
+          kind: meta.kind || "image",
+          prompt: String(meta.prompt || ""),
+          model: String(meta.model || "")
+        })
+      });
+    } catch {}
   }
 
   async function loadModels() {
@@ -398,6 +479,7 @@ export default function App() {
       const items = extractMobileMediaItems(data, baseUrl, "image");
       setMedia(items);
       addToGallery(items, { prompt, model: imageModel });
+      claimToServer(items, { kind: "image", prompt, model: imageModel });
       setStatus(extractJobId(data) ? `任务已提交：${extractJobId(data)}` : "图片生成完成");
     } catch (error) {
       setStatus(error.message);
@@ -424,6 +506,7 @@ export default function App() {
       const items = extractMobileMediaItems(data, baseUrl, "video");
       setMedia(items);
       addToGallery(items, { prompt: rawPrompt, model: videoModel });
+      claimToServer(items, { kind: "video", prompt: rawPrompt, model: videoModel });
       setStatus(extractJobId(data) ? `任务已提交：${extractJobId(data)}` : "视频生成完成");
     } catch (error) {
       setStatus(error.message);
@@ -457,43 +540,18 @@ export default function App() {
   }
 
   async function syncServerGallery() {
-    if (!adminUser.trim() || !adminPass.trim()) {
-      setStatus("请先在设置里填写管理端账号和密码，再同步服务器媒体");
-      return;
-    }
+    if (!wbToken) return setStatus("请先在设置里注册/登录工作台账号，再同步图库");
     setGalleryLoading(true);
     try {
-      let accessToken = adminToken;
-      if ((!accessToken || !adminTokenExpiresAt || Date.now() >= new Date(adminTokenExpiresAt).getTime()) && adminUser.trim() && adminPass.trim()) {
-        setStatus("正在登录管理端同步媒体");
-        const loginData = await rawJsonRequest(`${cleanBaseUrl(baseUrl)}/api/admin/v1/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: adminUser.trim(), password: adminPass })
-        });
-        const tokens = loginData?.tokens;
-        if (!tokens?.accessToken) throw new Error("管理端登录未返回令牌");
-        accessToken = tokens.accessToken;
-        setAdminToken(accessToken);
-        setAdminTokenExpiresAt(tokens.accessTokenExpiresAt || "");
-      }
-      const adminHeaders = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
-      let imageData = null;
-      let videoData = null;
-      const errors = [];
-      try {
-        imageData = await rawJsonRequest(`${cleanBaseUrl(baseUrl)}/api/admin/v1/media/images?page=1&pageSize=100`, { headers: adminHeaders });
-      } catch (error) {
-        errors.push(error.message);
-      }
-      try {
-        videoData = await rawJsonRequest(`${cleanBaseUrl(baseUrl)}/api/admin/v1/media/videos?page=1&pageSize=100`, { headers: adminHeaders });
-      } catch (error) {
-        errors.push(error.message);
-      }
+      setStatus("正在从工作台同步你的图库");
+      const headers = wbAuthHeaders();
+      const [imageData, videoData] = await Promise.all([
+        rawJsonRequest(`${cleanBaseUrl(wbBaseUrl)}/library?kind=image&limit=200`, { headers }),
+        rawJsonRequest(`${cleanBaseUrl(wbBaseUrl)}/library?kind=video&limit=200`, { headers })
+      ]);
       const serverItems = [
-        ...extractAdminMediaItems(imageData, baseUrl, "image"),
-        ...extractAdminMediaItems(videoData, baseUrl, "video")
+        ...extractWorkbenchLibraryItems(imageData, baseUrl, "image"),
+        ...extractWorkbenchLibraryItems(videoData, baseUrl, "video")
       ];
       if (serverItems.length) {
         setGallery((current) => {
@@ -504,11 +562,9 @@ export default function App() {
           }
           return next.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 300);
         });
-        setStatus(`已同步服务器媒体 ${serverItems.length} 条`);
-      } else if (errors.length) {
-        setStatus(`同步失败：${errors[0]}`);
+        setStatus(`已同步图库 ${serverItems.length} 条（账号：${wbUser?.username || wbUsername}）`);
       } else {
-        setStatus("服务器没有可同步的媒体");
+        setStatus(`图库为空，生成图片/视频后会记录到你的账号（${wbUser?.username || wbUsername}）`);
       }
     } catch (error) {
       setStatus(`同步失败：${error.message}`);
@@ -523,15 +579,7 @@ export default function App() {
     const url = repaired?.url || item.url;
     setStatus(item.kind === "video" ? "正在下载视频" : "正在下载图片");
     try {
-      const fileUri = `${FileSystem.cacheDirectory}grok-${item.kind || "image"}-${Date.now()}.${item.kind === "video" ? "mp4" : "jpg"}`;
-      if (url.startsWith("data:")) {
-        const match = url.match(/^data:[^;]+;base64,(.*)$/s);
-        if (!match) throw new Error("不支持的数据格式");
-        await FileSystem.writeAsStringAsync(fileUri, match[1], { encoding: FileSystem.EncodingType.Base64 });
-      } else {
-        const download = await FileSystem.downloadAsync(url, fileUri);
-        if (download.status !== 200) throw new Error(`下载失败（${download.status}）`);
-      }
+      const fileUri = await downloadToCache(url, item.kind === "video" ? "video" : "image");
       const permission = await MediaLibrary.requestPermissionsAsync(true);
       if (permission.granted || permission.accessPrivileges === "all") {
         await MediaLibrary.saveToLibraryAsync(fileUri);
@@ -636,7 +684,26 @@ export default function App() {
       <Text style={styles.status}>{status}</Text>
 
       {mode === "settings" ? (
-        <SettingsWorkspace baseUrl={baseUrl} setBaseUrl={setBaseUrl} apiKey={apiKey} setApiKey={setApiKey} adminUser={adminUser} setAdminUser={setAdminUser} adminPass={adminPass} setAdminPass={setAdminPass} saveSettings={saveSettings} loadModels={loadModels} models={models} busy={busy} />
+        <SettingsWorkspace
+          baseUrl={baseUrl}
+          setBaseUrl={setBaseUrl}
+          apiKey={apiKey}
+          setApiKey={setApiKey}
+          wbBaseUrl={wbBaseUrl}
+          setWbBaseUrl={setWbBaseUrl}
+          wbUser={wbUser}
+          wbUsername={wbUsername}
+          setWbUsername={setWbUsername}
+          wbPassword={wbPassword}
+          setWbPassword={setWbPassword}
+          onLogin={wbLogin}
+          onRegister={wbRegister}
+          onLogout={wbLogout}
+          saveSettings={saveSettings}
+          loadModels={loadModels}
+          models={models}
+          busy={busy}
+        />
       ) : mode === "prompt" ? (
         <PromptWorkspace
           workflow={workflow}
@@ -773,22 +840,39 @@ export default function App() {
   );
 }
 
-function SettingsWorkspace({ baseUrl, setBaseUrl, apiKey, setApiKey, adminUser, setAdminUser, adminPass, setAdminPass, saveSettings, loadModels, models, busy }) {
+function SettingsWorkspace({ baseUrl, setBaseUrl, apiKey, setApiKey, wbBaseUrl, setWbBaseUrl, wbUser, wbUsername, setWbUsername, wbPassword, setWbPassword, onLogin, onRegister, onLogout, saveSettings, loadModels, models, busy }) {
   return (
     <View style={styles.workspace}>
+      <Text style={styles.sectionTitle}>账号（与 Web 端通用，图库按账号隔离）</Text>
+      <Text style={styles.label}>工作台地址</Text>
+      <TextInput value={wbBaseUrl} onChangeText={setWbBaseUrl} style={styles.input} autoCapitalize="none" placeholder="http://192.168.123.195:38696" />
+      {wbUser ? (
+        <View style={styles.actions}>
+          <Text style={styles.hint}>已登录：{wbUser.username || wbUsername}</Text>
+          <Pressable style={styles.button} onPress={onLogout}><Text style={styles.buttonText}>退出登录</Text></Pressable>
+        </View>
+      ) : (
+        <>
+          <Text style={styles.label}>用户名</Text>
+          <TextInput value={wbUsername} onChangeText={setWbUsername} style={styles.input} autoCapitalize="none" placeholder="3-40 位字母/数字/._-@，小写" />
+          <Text style={styles.label}>密码</Text>
+          <TextInput value={wbPassword} onChangeText={setWbPassword} style={styles.input} autoCapitalize="none" secureTextEntry placeholder="至少 6 位" />
+          <View style={styles.actions}>
+            <Pressable style={styles.primary} onPress={onLogin} disabled={busy}><Text style={styles.primaryText}>{busy ? "处理中..." : "登录"}</Text></Pressable>
+            <Pressable style={styles.button} onPress={onRegister} disabled={busy}><Text style={styles.buttonText}>{busy ? "处理中..." : "注册新账号"}</Text></Pressable>
+          </View>
+        </>
+      )}
+      <Text style={styles.sectionTitle}>生成服务</Text>
       <Text style={styles.label}>Grok2API 地址</Text>
       <TextInput value={baseUrl} onChangeText={setBaseUrl} style={styles.input} autoCapitalize="none" placeholder="http://192.168.123.195:38695" />
       <Text style={styles.label}>完整客户端 Key</Text>
       <TextInput value={apiKey} onChangeText={setApiKey} style={styles.input} autoCapitalize="none" secureTextEntry placeholder="sk-..." />
-      <Text style={styles.label}>管理端账号（用于同步服务器图库）</Text>
-      <TextInput value={adminUser} onChangeText={setAdminUser} style={styles.input} autoCapitalize="none" placeholder="admin" />
-      <Text style={styles.label}>管理端密码（仅保存在本机）</Text>
-      <TextInput value={adminPass} onChangeText={setAdminPass} style={styles.input} autoCapitalize="none" secureTextEntry placeholder="Grok2API 管理后台密码" />
       <View style={styles.actions}>
         <Pressable style={styles.primary} onPress={saveSettings}><Text style={styles.primaryText}>保存设置</Text></Pressable>
         <Pressable style={styles.button} onPress={loadModels} disabled={busy}><Text style={styles.buttonText}>{busy ? "读取中..." : "获取模型"}</Text></Pressable>
       </View>
-      <Text style={styles.hint}>已获取 {models.length} 个模型。管理端账号用于“图库 → 同步服务器媒体”拉取服务器历史，请填写 Grok2API 管理后台（端口 38695 /admin）的登录账号。</Text>
+      <Text style={styles.hint}>已获取 {models.length} 个模型。登录工作台账号后，生成的图片/视频会自动记到你的账号；换手机登录同一账号也能在图库看到自己的历史，别人看不到。</Text>
     </View>
   );
 }
@@ -847,11 +931,11 @@ function GalleryWorkspace({ gallery, loading, sync, download, openPreview, clear
   return (
     <View style={styles.galleryArea}>
       <View style={styles.actions}>
-        <Pressable style={styles.primary} onPress={sync} disabled={loading}><Text style={styles.primaryText}>{loading ? "同步中..." : "同步服务器媒体"}</Text></Pressable>
+        <Pressable style={styles.primary} onPress={sync} disabled={loading}><Text style={styles.primaryText}>{loading ? "同步中..." : "同步我的图库"}</Text></Pressable>
         <Pressable style={styles.button} onPress={clearLocal}><Text style={styles.buttonText}>清空本机记录</Text></Pressable>
       </View>
       {gallery.length === 0 ? (
-        <Text style={styles.emptyTitle}>图库为空。生成图片/视频后会自动记录，或点“同步服务器媒体”拉取历史。</Text>
+        <Text style={styles.emptyTitle}>图库为空。生成图片/视频后会自动记录；登录工作台账号后点“同步服务器媒体”，可拉取你自己账号的历史。</Text>
       ) : (
         <>
           <Text style={styles.label}>图片（{images.length}）</Text>
@@ -1226,6 +1310,35 @@ async function rawJsonRequest(url, options = {}) {
   return data;
 }
 
+async function downloadToCache(url, kind) {
+  const ext = kind === "video" ? "mp4" : "jpg";
+  const fileUri = `${FileSystem.cacheDirectory}grok-${kind}-${Date.now()}.${ext}`;
+  if (String(url || "").startsWith("data:")) {
+    const match = String(url).match(/^data:[^;]+;base64,(.*)$/s);
+    if (!match) throw new Error("不支持的数据格式");
+    await FileSystem.writeAsStringAsync(fileUri, match[1], { encoding: FileSystem.EncodingType.Base64 });
+    return fileUri;
+  }
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`下载失败（${response.status}）`);
+  const blob = await response.blob();
+  const base64 = await blobToBase64(blob);
+  await FileSystem.writeAsStringAsync(fileUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+  return fileUri;
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("读取下载内容失败"));
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      resolve(result.includes(",") ? result.split(",")[1] : result);
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
 function normalizeMobileMediaUrl(value, baseUrl) {
   const raw = String(value || "");
   if (!raw) return "";
@@ -1314,42 +1427,24 @@ function extractMobileMediaItems(data, baseUrl, defaultKind = "image") {
   return output;
 }
 
-function extractAdminMediaItems(data, baseUrl, kind) {
-  const list = data?.items || data?.data || data?.records || data?.results || (Array.isArray(data) ? data : []);
+function extractWorkbenchLibraryItems(data, grokBaseUrl, kind) {
+  const list = data?.data || data?.items || (Array.isArray(data) ? data : []);
   if (!Array.isArray(list)) return [];
-  const origin = cleanBaseUrl(baseUrl);
+  const origin = cleanBaseUrl(grokBaseUrl);
   const output = [];
   for (const item of list) {
     if (!item || typeof item !== "object") continue;
-    if (kind === "video") {
-      if (String(item.status || "") && String(item.status) !== "completed") continue;
-      const assetId = String(item.assetID || item.asset_id || item.resultAssetId || item.result_asset_id || item.assetId || "");
-      if (!/^vid_/.test(assetId)) continue;
-      output.push({
-        id: assetId,
-        url: `${origin}/v1/media/videos/${encodeURIComponent(assetId)}`,
-        kind: "video",
-        mime: "video/mp4",
-        prompt: item.prompt || "",
-        model: item.model || "",
-        createdAt: new Date(item.completedAt || item.createdAt || Date.now()).getTime()
-      });
-      continue;
-    }
-    const id = String(item.id || item.assetId || item.asset_id || "");
-    const rawUrl = String(item.url || item.mediaUrl || item.media_url || "");
-    const url = rawUrl
-      ? normalizeMobileMediaUrl(rawUrl, origin)
-      : (id ? `${origin}/v1/media/images/${encodeURIComponent(id)}` : "");
-    if (!url) continue;
+    const id = String(item.id || "");
+    if (!/^(img|vid)_[A-Za-z0-9._-]+$/.test(id)) continue;
+    const itemKind = kind === "video" ? "video" : "image";
     output.push({
-      id: id || url,
-      url,
-      kind: "image",
-      mime: item.mimeType || item.mime_type || item.content_type || "image/jpeg",
+      id,
+      url: `${origin}/v1/media/${itemKind === "video" ? "videos" : "images"}/${encodeURIComponent(id)}`,
+      kind: itemKind,
+      mime: item.mime || (itemKind === "video" ? "video/mp4" : "image/jpeg"),
       prompt: item.prompt || "",
       model: item.model || "",
-      createdAt: new Date(item.createdAt || item.created_at || Date.now()).getTime()
+      createdAt: new Date(item.createdAt || item.updatedAt || Date.now()).getTime()
     });
   }
   return output;
@@ -1417,6 +1512,7 @@ const styles = StyleSheet.create({
   tabText: { color: "#232831", fontWeight: "600" },
   status: { color: "#69707a" },
   workspace: { gap: 12 },
+  sectionTitle: { color: "#15171c", fontWeight: "700", fontSize: 16, marginTop: 4 },
   label: { color: "#69707a", marginTop: 4 },
   hint: { color: "#9aa1ab", lineHeight: 19 },
   input: { minHeight: 46, backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8", borderRadius: 8, paddingHorizontal: 12 },

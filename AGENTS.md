@@ -261,3 +261,17 @@ docker logs --tail 20 grok-workbench-web
 - 清理：删除被取代的旧构建记录（Android v7、iOS v4、旧 Web），GitHub 仅保留最新 Web（33293185279）/ Android v1.0.10-8 / iOS v1.0.10-5 三条。
 - 部署：未改动任何服务器容器或镜像，Web 线上 1.0.9 保持不变；本文件已同步到服务器 `/opt/grok-workbench/AGENTS.md`。
 - 遗留：真实设备验证建议重点检查：设置页填管理端账号密码后“同步服务器媒体”能拉到服务器历史图片/视频；生成图片点击下载能直接写入系统相册（首次会弹权限）；公网地址下旧图库记录能正常显示与下载。
+
+### 2026-08-30：移动端接入工作台账号系统与下载修复（进行中）
+
+- 状态：进行中。
+- 目标：按用户反馈重构移动端图库方案：① 不再用 Grok2API 管理端账号同步（普通客户端 Key 永远无管理权限），改为和 Web 端一致的工作台注册/登录，图库按账号隔离，每个人只看自己的历史；② 修复 iOS 下载报错 `NSURLErrorDomain -3000 Cannot create file`。
+- 版本：全仓统一升 `1.0.11`（根、Web、移动端、core、锁文件、`APP_VERSION`、`app.json`、versionCode 10011）。上一轮移动端临时 `1.0.10` 仅为过渡，本轮统一回同版本。Web 需要重新构建并部署（server.mjs 有接口行为变化）。
+- 服务端改动（`apps/web/server.mjs`）：登录/注册响应体新增 `token` 字段；`getSessionUser` 同时接受 `Authorization: Bearer` / `X-GW-Token` 头（Cookie 兼容保留，Web 端不受影响）。本地已端到端验证：注册返回 token、带 token 读 `/library` 200、无 token 401、退出登录正常。
+- 移动端改动（`apps/mobile/App.js`、`app.json`、`package.json`）：
+  - 设置页移除“管理端账号/密码”，新增“工作台地址”（默认 `http://192.168.123.195:38696`）和注册/登录/退出；令牌与本机保存，密码不持久化。
+  - 图库“同步我的图库”改为拉取工作台 `/library?kind=image|video`（按账号），展示与下载用 Grok2API 公网媒体 URL（`/v1/media/images|videos/{id}`，免鉴权）。
+  - 生成图片/视频成功后自动 `POST /ownership/claim` 把资源归属到当前账号，Web 端与移动端同账号互通。
+  - 下载修复：弃用 `FileSystem.downloadAsync`（iOS 后台下载任务会报 -3000），改为 `fetch` + `blob` + Base64 `writeAsStringAsync` 落盘，再 `MediaLibrary.saveToLibraryAsync` 存相册，权限拒绝时回退分享。
+- 风险：工作台默认内网地址，手机在外网时需在设置里填工作台公网地址（或连内网 Wi-Fi）；Web 部署必须保留数据卷与旧镜像回滚标签。
+- 范围：`apps/web/server.mjs`、版本元数据、`apps/mobile/*`、CI 版本读取（上轮已改）、AGENTS.md；Web 容器需重新部署。
