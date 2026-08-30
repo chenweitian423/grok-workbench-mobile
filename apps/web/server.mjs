@@ -228,9 +228,14 @@ function kindFromAssetId(id) {
 async function recordAssetsForUser(userId, ids, meta = {}) {
   const validIds = Array.from(new Set((ids || []).filter((id) => /^(img|vid)_[A-Za-z0-9._-]+$/.test(id))));
   if (!userId || !validIds.length) return;
+  const withFiles = [];
+  for (const id of validIds) {
+    if (await findAssetFile(id)) withFiles.push(id);
+  }
+  if (!withFiles.length) return;
   const db = await readAuthDb();
   const existing = new Map(db.assets.map((asset) => [`${asset.userId}:${asset.id}`, asset]));
-  for (const id of validIds) {
+  for (const id of withFiles) {
     const key = `${userId}:${id}`;
     const previous = existing.get(key);
     const next = {
@@ -523,7 +528,11 @@ async function serveLibrary(req, res) {
       });
     }
     items.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
-    send(res, 200, JSON.stringify({ data: items.slice(0, limit) }), {
+    send(res, 200, JSON.stringify({
+      data: items.slice(0, limit),
+      total: owned.length,
+      available: items.length
+    }), {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-cache"
     });

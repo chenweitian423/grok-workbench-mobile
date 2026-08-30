@@ -307,3 +307,26 @@ docker logs --tail 20 grok-workbench-web
 - 部署：Web 线上已更新为 1.0.12，当前镜像 `sha256:197385bace4cf43707ac78897650bed94baa36da070a7862429358a5ed8e11c0`（标签 `web-grok-workbench-web:latest`）；线上首页与 `/auth/me` 200、未登录 `/library` 401；容器继续挂载 `web_grok-workbench-data:/app/data` 与只读 `grok2api_grok2api-data:/grok2api-data`。回滚标签 `web-grok-workbench-web:1.0.11-before-mobile-image-params`（镜像 `c85a5f67ad9c`）；源码备份 `/opt/grok-workbench/backups/1.0.11-before-mobile-image-params-20260830/`。
 - 事故记录：备份/同步服务器源码时，PowerShell 会先展开双引号命令里的 `$B` 变量，导致部分文件被复制到系统根目录 `/`（AGENTS.md、package.json、package-lock.json、/apps、/packages）。已逐文件核对 SHA256 与原件一致后清理，根目录无残留；教训：ssh 远程命令含变量的场景要避免 PowerShell 展开。
 - 遗留：真实设备验证重点：① 图片页数量/比例/分辨率 chips 是否生效（接口 `n/aspect_ratio/resolution`）；② 提示词分段复制是否按预期分组；③ Web 端 1.0.12 版本显示正常（线上已确认）。
+
+### 2026-08-30：图库计数修复、键盘遮挡优化、视频参数/视频库对齐 Web 与提示词链路排查（进行中）
+
+- 状态：进行中。
+- 目标：① 排查并修复图库“同步 52 条但只显示 50 条”的计数与展示逻辑；② 优化设置页密钥输入、聊天输入框被输入法遮挡的问题；③ 移动端视频页对齐 Web：补齐时长/比例/分辨率参数、新增视频库（图库同款），并核实手机生成视频时后端实际收到的提示词。
+- 预期版本：全仓统一 `1.0.13`；Web 需重新构建并部署（server.mjs 的 `/library` 返回结构与归属校验有变化）。
+- 范围：`apps/web/server.mjs`、`apps/mobile/App.js`、`apps/mobile/app.json`、版本元数据、AGENTS.md。
+- 已排查结论：
+  - 图库：sky 账号 auth.json 有 83 条资产记录，但共享媒体卷只有 52 条有真实文件（49 图 + 3 视频）；`/library` 只返回有文件的记录，移动端解析+修复后仍为 52 条、无重复，显示链路无丢失。“同步 52 显示 50”的感知差异来自：服务器存在 31 条“只有记录、没有媒体文件”的失效资产（11 图 + 20 视频），其中视频文件历史上被清理/从未落盘（Grok2API media_assets 表仅 3 个视频、其余 73 个 vid 记录无文件）。
+  - 视频提示词：Grok2API 的 media_jobs 表显示今天 3 个视频任务收到的 prompt 分别为“西方旗袍美女穿着黑丝高跟鞋”“韩国美女跳一段舞蹈”“生成一段动漫战争桥段”，均为 6s/16:9/grok-imagine-video；后端确实收到了用户输入（提交时大量 429 限流，仅 3 次 200 成功）。但移动端 `createVideo` 用 `generatedPrompt || promptInput`，若提示词页生成过结果，视频页新输入会被旧的 generatedPrompt 覆盖——这是“提示词与输入不符”的可疑根因，需修复。
+  - 视频参数：移动端硬编码 duration=6/resolution=720p/aspectRatio=16:9；Web 为 duration [6,10,15]、比例 [16:9,9:16,1:1]、分辨率 [720p,1080p]。
+  - 视频库：Web 视频页内嵌“视频库”历史区块；移动端只有独立图库页签，视频页没有。
+  - 键盘：主布局是单层 ScrollView，无 KeyboardAvoidingView；Android app.json 未显式声明 `softwareKeyboardLayoutMode: resize`。
+- 已实现：
+  - 服务端 `recordAssetsForUser` 先校验媒体文件真实存在再入库，杜绝再次堆积“有记录无文件”的失效资产；`/library` 响应新增 `total`（数据库记录数）与 `available`（实际可读数）。
+  - 移动端同步状态改为分类计数：`已同步图库 N 条（图片 X、视频 Y）`；服务器历史与可读数不一致时额外提示“其余为无媒体文件的失效记录”，让用户明白差异来源。
+  - 移动端视频页补齐 Web 同款参数 chips：时长 6s/10s/15s、比例 16:9/9:16/1:1、分辨率 720p/1080p，提交时按所选参数构造请求体。
+  - 移动端视频页新增“视频库”区块（同步按钮 + 视频卡片：详情/播放/下载，与图库同源数据），新增“实际发送的提示词”预览（提示词原文、字数/字节、完整请求体），便于核对后端实际收到什么。
+  - `createVideo` 改为提取 jobId 后轮询完成（3 分钟超时），不再“提交即显示完成”；完成后自动写入图库并归属账号。
+  - 修复提示词覆盖：移动端与 Web 端在创作页手动修改输入框时清空旧的 generatedPrompt，避免“提示词页生成过的旧文案”覆盖新输入；`generatedPrompt || input` 仅在用户未输入时兜底使用。
+  - 键盘遮挡：App 主布局外包 KeyboardAvoidingView（iOS padding），app.json Android 增加 `softwareKeyboardLayoutMode: resize`，主 ScrollView 增加 `keyboardShouldPersistTaps="handled"`。
+- 本地验证：`npm run build:web` 通过（1577 模块）；`npx expo export --platform android` 通过（590 模块）；版本元数据已统一 1.0.13。
+- 待办：提交推送触发 CI（Web/Android 自动、iOS 手动）；下载 APK/IPA 归档；同步服务器正确源码并部署 Web 候选镜像；线上功能标记与 `/library` 计数验证；收尾后把本条改为“已完成”。

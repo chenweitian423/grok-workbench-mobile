@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio } from "expo-av";
 import * as Clipboard from "expo-clipboard";
@@ -13,7 +13,7 @@ import { DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, PROMPT_
 
 const SETTINGS_KEY = "grok-workbench-mobile-settings";
 const GALLERY_KEY = "grok-workbench-mobile-gallery";
-const MOBILE_APP_VERSION = "1.0.12";
+const MOBILE_APP_VERSION = "1.0.13";
 const DEFAULT_WORKBENCH_BASE_URL = "http://192.168.123.195:38696";
 
 const TABS = [
@@ -137,6 +137,9 @@ export default function App() {
   const [voiceModel, setVoiceModel] = useState(DEFAULT_MODELS.voice);
   const [musicModel, setMusicModel] = useState("grok-4.5");
   const [imageParams, setImageParams] = useState({ count: 1, aspectRatio: "1:1", resolution: "1k" });
+  const [videoParams, setVideoParams] = useState({ duration: 6, aspectRatio: "16:9", resolution: "720p" });
+  const [videoRequestPreview, setVideoRequestPreview] = useState(null);
+  const pollToken = useRef(0);
   const [gallery, setGallery] = useState([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [previewItem, setPreviewItem] = useState(null);
@@ -458,6 +461,11 @@ export default function App() {
     setStatus("已复制到输入框，可到图片/视频页使用");
   }
 
+  function handleCreateInputChange(value) {
+    setPromptInput(value);
+    if (value !== generatedPrompt) setGeneratedPrompt("");
+  }
+
   async function createImage() {
     if (!requireKey()) return;
     const originalPrompt = String(generatedPrompt || promptInput || "").trim();
@@ -496,24 +504,71 @@ export default function App() {
     setBusy(true);
     try {
       setStatus("正在提交视频任务");
-      const data = await api.generateVideo(buildVideoGenerationBody({
+      const requestBody = buildVideoGenerationBody({
         prompt: rawPrompt,
         model: videoModel,
-        duration: 6,
-        resolution: "720p",
-        aspectRatio: "16:9",
+        ...videoParams,
         image: imageDataUrl || undefined
-      }));
+      });
+      setVideoRequestPreview({
+        prompt: rawPrompt,
+        promptChars: rawPrompt.length,
+        promptBytes: new TextEncoder().encode(rawPrompt).length,
+        body: requestBody
+      });
+      const data = await api.generateVideo(requestBody);
       const items = extractMobileMediaItems(data, baseUrl, "video");
+      const jobId = extractJobId(data);
       setMedia(items);
-      addToGallery(items, { prompt: rawPrompt, model: videoModel });
-      claimToServer(items, { kind: "video", prompt: rawPrompt, model: videoModel });
-      setStatus(extractJobId(data) ? `任务已提交：${extractJobId(data)}` : "视频生成完成");
+      if (items.length) {
+        addToGallery(items, { prompt: rawPrompt, model: videoModel });
+        claimToServer(items, { kind: "video", prompt: rawPrompt, model: videoModel });
+        setStatus("视频生成完成");
+      } else if (jobId) {
+        setStatus(`视频任务已提交：${jobId}，等待生成完成`);
+        await pollVideo(jobId, rawPrompt, videoModel, ++pollToken.current);
+      } else {
+        setStatus("视频请求已提交，可在图库刷新查看结果");
+      }
     } catch (error) {
       setStatus(error.message);
     } finally {
       setBusy(false);
     }
+  }
+
+  async function pollVideo(jobId, prompt, selectedModel, token) {
+    const startedAt = Date.now();
+    let waitMs = 3000;
+    while (pollToken.current === token && Date.now() - startedAt < 180000) {
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      try {
+        const data = await api.getVideoSnapshot(jobId);
+        const items = extractMobileMediaItems(data, baseUrl, "video");
+        const nextStatus = data?.status || data?.state || "in_progress";
+        const done = ["completed", "done", "succeeded", "success"].includes(nextStatus);
+        const progress = Number(data?.progress ?? data?.percent ?? (done ? 100 : 0));
+        const finalEnough = done || progress >= 100 || Boolean(data?.result_asset_id || data?.resultAssetId || data?.video?.url || data?.image?.url || data?.result?.url);
+        if (nextStatus === "failed" || nextStatus === "error") {
+          setStatus(data?.error_message || data?.message || "视频生成失败");
+          return;
+        }
+        if (items.length || finalEnough) {
+          if (items.length) {
+            addToGallery(items, { prompt, model: selectedModel });
+            claimToServer(items, { kind: "video", prompt, model: selectedModel });
+            setMedia(items);
+          }
+          setStatus("视频生成完成");
+          return;
+        }
+        setStatus(`视频生成中${progress > 0 ? ` ${progress}%` : ""}...`);
+        waitMs = Math.min(waitMs + 1500, 6000);
+      } catch {
+        // 轮询过程中的瞬时失败继续等待
+      }
+    }
+    if (pollToken.current === token) setStatus("视频任务仍在生成，可稍后在图库刷新查看");
   }
 
   function addToGallery(items, meta = {}) {
@@ -555,6 +610,16 @@ export default function App() {
         ...extractWorkbenchLibraryItems(videoData, baseUrl, "video")
       ];
       if (serverItems.length) {
+        const imageCount = serverItems.filter((item) => item.kind !== "video").length;
+        const videoCount = serverItems.filter((item) => item.kind === "video").length;
+        const imageTotal = Number(imageData?.total ?? imageData?.available ?? imageCount);
+        const videoTotal = Number(videoData?.total ?? videoData?.available ?? videoCount);
+        const imageAvailable = Number(imageData?.available ?? imageCount);
+        const videoAvailable = Number(videoData?.available ?? videoCount);
+        const breakdown = `已同步图库 ${serverItems.length} 条（图片 ${imageCount}、视频 ${videoCount}）`;
+        const serverNote = (imageTotal !== imageAvailable || videoTotal !== videoAvailable)
+          ? `；服务器历史 ${imageTotal + videoTotal} 条，可查看 ${imageAvailable + videoAvailable} 条（其余为无媒体文件的失效记录）`
+          : "";
         setGallery((current) => {
           const next = [...current];
           for (const item of serverItems) {
@@ -563,7 +628,7 @@ export default function App() {
           }
           return next.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 300);
         });
-        setStatus(`已同步图库 ${serverItems.length} 条（账号：${wbUser?.username || wbUsername}）`);
+        setStatus(`${breakdown}${serverNote}（账号：${wbUser?.username || wbUsername}）`);
       } else {
         setStatus(`图库为空，生成图片/视频后会记录到你的账号（${wbUser?.username || wbUsername}）`);
       }
@@ -664,8 +729,9 @@ export default function App() {
   const isOutputMode = mode === "image" || mode === "video";
 
   return (
-    <ScrollView style={styles.root} contentContainerStyle={styles.content}>
-      <StatusBar style="dark" />
+    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 40 : 0}>
+      <ScrollView style={styles.root} contentContainerStyle={styles.content}>
+        <StatusBar style="dark" />
       <View style={styles.header}>
         <Image source={require("./assets/icon.png")} style={styles.logo} />
         <View>
@@ -793,7 +859,7 @@ export default function App() {
           setModel={mode === "video" ? setVideoModel : setImageModel}
           modelOptions={mode === "video" ? modelLists.video : modelLists.image}
           input={promptInput}
-          setInput={setPromptInput}
+          setInput={handleCreateInputChange}
           imageDataUrl={imageDataUrl}
           pickImage={pickImage}
           create={mode === "video" ? createVideo : createImage}
@@ -801,6 +867,14 @@ export default function App() {
           media={media}
           imageParams={imageParams}
           setImageParams={setImageParams}
+          videoParams={videoParams}
+          setVideoParams={setVideoParams}
+          videoRequestPreview={videoRequestPreview}
+          videoLibrary={galleryItems.filter((item) => item.kind === "video")}
+          videoLibraryLoading={galleryLoading}
+          syncVideoLibrary={syncServerGallery}
+          download={downloadMedia}
+          openPreview={setPreviewItem}
         />
       )}
 
@@ -839,7 +913,8 @@ export default function App() {
           )}
         </Pressable>
       </Modal>
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -935,7 +1010,7 @@ function PromptWorkspace({ workflow, workflowId, setWorkflowId, input, setInput,
   );
 }
 
-function MediaWorkspace({ mode, model, setModel, modelOptions, input, setInput, imageDataUrl, pickImage, create, busy, media, imageParams, setImageParams }) {
+function MediaWorkspace({ mode, model, setModel, modelOptions, input, setInput, imageDataUrl, pickImage, create, busy, media, imageParams, setImageParams, videoParams, setVideoParams, videoRequestPreview, videoLibrary, videoLibraryLoading, syncVideoLibrary, download, openPreview }) {
   const isVideo = mode === "video";
   return (
     <View style={styles.workspace}>
@@ -948,12 +1023,51 @@ function MediaWorkspace({ mode, model, setModel, modelOptions, input, setInput, 
           <ParamChips label="图片比例" value={imageParams.aspectRatio} options={["1:1", "16:9", "9:16", "4:3", "3:4"]} onChange={(item) => setImageParams({ ...imageParams, aspectRatio: item })} disabled={busy} />
           <ParamChips label="分辨率" value={imageParams.resolution} options={["1k", "2k"]} onChange={(item) => setImageParams({ ...imageParams, resolution: item })} disabled={busy} />
         </>
-      ) : null}
+      ) : (
+        <>
+          <ParamChips label="时长" value={videoParams.duration} options={[6, 10, 15]} format={(item) => `${item}s`} onChange={(item) => setVideoParams({ ...videoParams, duration: item })} disabled={busy} />
+          <ParamChips label="视频比例" value={videoParams.aspectRatio} options={["16:9", "9:16", "1:1"]} onChange={(item) => setVideoParams({ ...videoParams, aspectRatio: item })} disabled={busy} />
+          <ParamChips label="分辨率" value={videoParams.resolution} options={["720p", "1080p"]} onChange={(item) => setVideoParams({ ...videoParams, resolution: item })} disabled={busy} />
+        </>
+      )}
       <View style={styles.actions}>
         <Pressable style={styles.button} onPress={pickImage}><Text style={styles.buttonText}>参考图</Text></Pressable>
         <Pressable style={styles.primary} onPress={create} disabled={busy}><Text style={styles.primaryText}>{isVideo ? "生成视频" : "生成图片"}</Text></Pressable>
       </View>
       {imageDataUrl ? <Image source={{ uri: imageDataUrl }} style={styles.preview} /> : null}
+      {isVideo && videoRequestPreview ? (
+        <View style={styles.requestPreview}>
+          <Text style={styles.sectionTitle}>实际发送的提示词</Text>
+          <Text style={styles.requestPrompt}>{videoRequestPreview.prompt}</Text>
+          <Text style={styles.requestMeta}>{videoRequestPreview.promptChars} 字 / {videoRequestPreview.promptBytes} 字节</Text>
+          <Text style={styles.requestBody}>{JSON.stringify(videoRequestPreview.body, null, 2)}</Text>
+        </View>
+      ) : null}
+      {isVideo ? (
+        <View style={styles.videoLibrary}>
+          <View style={styles.actions}>
+            <Text style={styles.sectionTitle}>视频库</Text>
+            <Pressable style={styles.button} onPress={syncVideoLibrary} disabled={videoLibraryLoading}>
+              <Text style={styles.buttonText}>{videoLibraryLoading ? "同步中..." : "同步视频库"}</Text>
+            </Pressable>
+          </View>
+          {videoLibrary.length === 0 ? (
+            <Text style={styles.emptyTitle}>暂无视频记录。生成视频后会自动记录；登录工作台账号后点“同步视频库”，可拉取你自己账号的视频历史。</Text>
+          ) : (
+            videoLibrary.map((item) => (
+              <View key={String(item.id || item.url)} style={styles.videoLink}>
+                <Text style={styles.videoTitle} numberOfLines={1}>{item.prompt || item.model || "视频"}</Text>
+                <Text style={styles.videoUrl} numberOfLines={2}>{item.url}</Text>
+                <View style={styles.actions}>
+                  <Pressable style={styles.button} onPress={() => openPreview(item)}><Text style={styles.buttonText}>详情</Text></Pressable>
+                  <Pressable style={styles.button} onPress={() => Linking.openURL(item.url)}><Text style={styles.buttonText}>播放</Text></Pressable>
+                  <Pressable style={styles.button} onPress={() => download(item)}><Text style={styles.buttonText}>下载</Text></Pressable>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1619,6 +1733,11 @@ const styles = StyleSheet.create({
   videoLink: { padding: 14, borderRadius: 8, backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8" },
   videoTitle: { fontWeight: "700", color: "#15171c" },
   videoUrl: { color: "#69707a", marginTop: 6 },
+  requestPreview: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#e2e6eb", borderRadius: 10, padding: 12, gap: 8 },
+  requestPrompt: { color: "#15171c", fontWeight: "600", lineHeight: 21 },
+  requestMeta: { color: "#9aa1ab", fontSize: 12 },
+  requestBody: { color: "#69707a", fontSize: 12, lineHeight: 18 },
+  videoLibrary: { gap: 10 },
   voiceArea: { gap: 12 },
   voiceModes: { flexDirection: "row", gap: 8, justifyContent: "center" },
   voiceMode: { paddingHorizontal: 16, height: 40, borderRadius: 20, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff", justifyContent: "center" },

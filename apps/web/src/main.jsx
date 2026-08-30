@@ -890,7 +890,10 @@ function App() {
           <CreatePanel
             active={active}
             input={input}
-            setInput={setInput}
+            setInput={(value) => {
+              setInput(value);
+              if (value !== generatedPrompt) setGeneratedPrompt("");
+            }}
             generatedPrompt={generatedPrompt}
             imageDataUrl={imageDataUrl}
             onFile={onFile}
