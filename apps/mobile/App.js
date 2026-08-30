@@ -1,14 +1,17 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio } from "expo-av";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
+import * as Sharing from "expo-sharing";
 import { StatusBar } from "expo-status-bar";
-import { APP_VERSION, DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, PROMPT_WORKFLOWS, buildVideoGenerationBody, extractJobId, extractMediaItems } from "@grok-workbench/core";
+import { APP_VERSION, DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, PROMPT_WORKFLOWS, buildVideoGenerationBody, extractJobId } from "@grok-workbench/core";
 
 const SETTINGS_KEY = "grok-workbench-mobile-settings";
+const GALLERY_KEY = "grok-workbench-mobile-gallery";
 
 const TABS = [
   { id: "prompt", label: "提示词" },
@@ -17,6 +20,7 @@ const TABS = [
   { id: "video", label: "视频" },
   { id: "voice", label: "语音" },
   { id: "music", label: "音乐" },
+  { id: "gallery", label: "图库" },
   { id: "settings", label: "设置" }
 ];
 
@@ -124,6 +128,9 @@ export default function App() {
   const [videoModel, setVideoModel] = useState(DEFAULT_MODELS.video);
   const [voiceModel, setVoiceModel] = useState(DEFAULT_MODELS.voice);
   const [musicModel, setMusicModel] = useState("grok-4.5");
+  const [gallery, setGallery] = useState([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+  const [previewItem, setPreviewItem] = useState(null);
 
   const api = useMemo(() => new GrokApi({ baseUrl, apiKey }), [baseUrl, apiKey]);
   const workflow = PROMPT_WORKFLOWS.find((item) => item.id === workflowId) || PROMPT_WORKFLOWS[1];
@@ -144,12 +151,23 @@ export default function App() {
         setSettingsLoaded(true);
       }
     })();
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(GALLERY_KEY);
+        const saved = raw ? JSON.parse(raw) : [];
+        setGallery(Array.isArray(saved) ? saved : []);
+      } catch {}
+    })();
   }, []);
 
   useEffect(() => {
     if (!settingsLoaded) return undefined;
     AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey, models })).catch(() => {});
   }, [settingsLoaded, baseUrl, apiKey, models]);
+
+  useEffect(() => {
+    AsyncStorage.setItem(GALLERY_KEY, JSON.stringify(gallery)).catch(() => {});
+  }, [gallery]);
 
   useEffect(() => {
     if (mode !== "voice" || !apiKey.trim() || voiceMode !== "tts") return undefined;
@@ -363,7 +381,9 @@ export default function App() {
         setStatus("参考图分析完成，正在生成图片");
       }
       const data = await api.generateImage({ prompt, model: imageModel });
-      setMedia(extractMediaItems(data));
+      const items = extractMobileMediaItems(data, baseUrl, "image");
+      setMedia(items);
+      addToGallery(items, { prompt, model: imageModel });
       setStatus(extractJobId(data) ? `任务已提交：${extractJobId(data)}` : "图片生成完成");
     } catch (error) {
       setStatus(error.message);
@@ -387,12 +407,96 @@ export default function App() {
         aspectRatio: "16:9",
         image: imageDataUrl || undefined
       }));
-      setMedia(extractMediaItems(data));
+      const items = extractMobileMediaItems(data, baseUrl, "video");
+      setMedia(items);
+      addToGallery(items, { prompt: rawPrompt, model: videoModel });
       setStatus(extractJobId(data) ? `任务已提交：${extractJobId(data)}` : "视频生成完成");
     } catch (error) {
       setStatus(error.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  function addToGallery(items, meta = {}) {
+    if (!Array.isArray(items) || !items.length) return;
+    setGallery((current) => {
+      const next = [...current];
+      for (const item of items) {
+        if (!item?.url) continue;
+        const key = String(item.id || item.url);
+        const exists = next.some((entry) => String(entry.id || entry.url) === key || entry.url === item.url);
+        if (!exists) {
+          next.unshift({
+            id: item.id || item.url,
+            url: item.url,
+            kind: item.kind || "image",
+            mime: item.mime || "",
+            prompt: item.prompt || meta.prompt || "",
+            model: item.model || meta.model || "",
+            createdAt: Date.now()
+          });
+        }
+      }
+      return next.slice(0, 300);
+    });
+  }
+
+  async function syncServerGallery() {
+    if (!requireKey()) return;
+    setGalleryLoading(true);
+    try {
+      let imageData = null;
+      let videoData = null;
+      try {
+        imageData = await api.request("/api/admin/v1/media/images?page=1&pageSize=100");
+      } catch {}
+      try {
+        videoData = await api.request("/api/admin/v1/media/videos?page=1&pageSize=100");
+      } catch {}
+      const serverItems = [
+        ...extractAdminMediaItems(imageData, baseUrl, "image"),
+        ...extractAdminMediaItems(videoData, baseUrl, "video")
+      ];
+      if (serverItems.length) {
+        setGallery((current) => {
+          const next = [...current];
+          for (const item of serverItems) {
+            const exists = next.some((entry) => entry.url === item.url || String(entry.id) === String(item.id));
+            if (!exists) next.push(item);
+          }
+          return next.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 300);
+        });
+        setStatus(`已同步服务器媒体 ${serverItems.length} 条`);
+      } else {
+        setStatus("服务器接口无返回或当前 Key 无管理权限，仅显示本机生成记录");
+      }
+    } catch (error) {
+      setStatus(error.message);
+    } finally {
+      setGalleryLoading(false);
+    }
+  }
+
+  async function downloadMedia(item) {
+    if (!item?.url) return setStatus("没有可下载的媒体");
+    setStatus(item.kind === "video" ? "正在下载视频" : "正在下载图片");
+    try {
+      const ext = item.kind === "video" ? "mp4" : "jpg";
+      const fileUri = `${FileSystem.cacheDirectory}grok-${item.kind}-${Date.now()}.${ext}`;
+      const download = await FileSystem.downloadAsync(item.url, fileUri);
+      if (download.status !== 200) throw new Error(`下载失败（${download.status}）`);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: item.kind === "video" ? "video/mp4" : "image/jpeg",
+          dialogTitle: "保存 Grok 媒体"
+        });
+        setStatus("已保存到相册或文件");
+      } else {
+        setStatus(`已下载：${fileUri}`);
+      }
+    } catch (error) {
+      setStatus(error.message);
     }
   }
 
@@ -552,6 +656,18 @@ export default function App() {
           copied={copied}
           copyField={copyField}
         />
+      ) : mode === "gallery" ? (
+        <GalleryWorkspace
+          gallery={gallery}
+          loading={galleryLoading}
+          sync={syncServerGallery}
+          download={downloadMedia}
+          openPreview={setPreviewItem}
+          clearLocal={() => {
+            setGallery([]);
+            setStatus("本机图库记录已清空");
+          }}
+        />
       ) : (
         <MediaWorkspace
           mode={mode}
@@ -581,6 +697,28 @@ export default function App() {
           <Image key={item.id} source={{ uri: item.url }} style={styles.output} />
         );
       })}
+
+      <Modal visible={!!previewItem} transparent animationType="fade" onRequestClose={() => setPreviewItem(null)}>
+        <Pressable style={styles.previewBackdrop} onPress={() => setPreviewItem(null)}>
+          {previewItem?.kind === "video" ? (
+            <Pressable style={styles.previewCard} onPress={(event) => event.stopPropagation()}>
+              <Text style={styles.previewTitle}>{previewItem.prompt || "视频"}</Text>
+              <Pressable style={styles.button} onPress={() => Linking.openURL(previewItem.url)}><Text style={styles.buttonText}>在浏览器播放</Text></Pressable>
+              <Pressable style={styles.primary} onPress={() => downloadMedia(previewItem)}><Text style={styles.primaryText}>下载视频</Text></Pressable>
+              <Pressable style={styles.button} onPress={() => setPreviewItem(null)}><Text style={styles.buttonText}>关闭</Text></Pressable>
+            </Pressable>
+          ) : (
+            <Pressable style={styles.previewCard} onPress={(event) => event.stopPropagation()}>
+              <Image source={{ uri: previewItem?.url }} style={styles.previewImage} resizeMode="contain" />
+              {!!previewItem?.prompt && <Text style={styles.previewTitle} numberOfLines={2}>{previewItem.prompt}</Text>}
+              <View style={styles.actions}>
+                <Pressable style={styles.primary} onPress={() => downloadMedia(previewItem)}><Text style={styles.primaryText}>下载图片</Text></Pressable>
+                <Pressable style={styles.button} onPress={() => setPreviewItem(null)}><Text style={styles.buttonText}>关闭</Text></Pressable>
+              </View>
+            </Pressable>
+          )}
+        </Pressable>
+      </Modal>
     </ScrollView>
   );
 }
@@ -645,6 +783,48 @@ function MediaWorkspace({ mode, model, setModel, modelOptions, input, setInput, 
         <Pressable style={styles.primary} onPress={create} disabled={busy}><Text style={styles.primaryText}>{isVideo ? "生成视频" : "生成图片"}</Text></Pressable>
       </View>
       {imageDataUrl ? <Image source={{ uri: imageDataUrl }} style={styles.preview} /> : null}
+    </View>
+  );
+}
+
+function GalleryWorkspace({ gallery, loading, sync, download, openPreview, clearLocal }) {
+  const images = gallery.filter((item) => item.kind !== "video");
+  const videos = gallery.filter((item) => item.kind === "video");
+  return (
+    <View style={styles.galleryArea}>
+      <View style={styles.actions}>
+        <Pressable style={styles.primary} onPress={sync} disabled={loading}><Text style={styles.primaryText}>{loading ? "同步中..." : "同步服务器媒体"}</Text></Pressable>
+        <Pressable style={styles.button} onPress={clearLocal}><Text style={styles.buttonText}>清空本机记录</Text></Pressable>
+      </View>
+      {gallery.length === 0 ? (
+        <Text style={styles.emptyTitle}>图库为空。生成图片/视频后会自动记录，或点“同步服务器媒体”拉取历史。</Text>
+      ) : (
+        <>
+          <Text style={styles.label}>图片（{images.length}）</Text>
+          <View style={styles.galleryGrid}>
+            {images.map((item) => (
+              <Pressable key={String(item.id || item.url)} style={styles.galleryItem} onPress={() => openPreview(item)}>
+                <Image source={{ uri: item.url }} style={styles.galleryThumb} />
+                <View style={styles.galleryItemBar}>
+                  <Text style={styles.galleryItemPrompt} numberOfLines={1}>{item.prompt || item.model || "图片"}</Text>
+                  <Pressable style={styles.galleryDownload} onPress={() => download(item)}><Text style={styles.galleryDownloadText}>下载</Text></Pressable>
+                </View>
+              </Pressable>
+            ))}
+          </View>
+          <Text style={styles.label}>视频（{videos.length}）</Text>
+          {videos.map((item) => (
+            <View key={String(item.id || item.url)} style={styles.videoLink}>
+              <Text style={styles.videoTitle} numberOfLines={1}>{item.prompt || item.model || "视频"}</Text>
+              <Text style={styles.videoUrl} numberOfLines={2}>{item.url}</Text>
+              <View style={styles.actions}>
+                <Pressable style={styles.button} onPress={() => Linking.openURL(item.url)}><Text style={styles.buttonText}>播放</Text></Pressable>
+                <Pressable style={styles.button} onPress={() => download(item)}><Text style={styles.buttonText}>下载</Text></Pressable>
+              </View>
+            </View>
+          ))}
+        </>
+      )}
     </View>
   );
 }
@@ -972,6 +1152,105 @@ function extractTextResponse(data) {
   return parts.join("\n") || "接口没有返回文本";
 }
 
+function cleanBaseUrl(baseUrl) {
+  return String(baseUrl || "").trim().replace(/\/+$/, "");
+}
+
+function normalizeMobileMediaUrl(value, baseUrl) {
+  const raw = String(value || "");
+  if (!raw) return "";
+  if (raw.startsWith("data:")) return raw;
+  const origin = cleanBaseUrl(baseUrl);
+  if (/^https?:\/\//i.test(raw)) {
+    const pathMatch = raw.match(/^https?:\/\/[^/]+(\/.*)$/i);
+    const path = pathMatch ? pathMatch[1] : raw;
+    if (/127\.0\.0\.1|localhost|host\.docker\.internal|0\.0\.0\.0/i.test(raw)) {
+      return `${origin}${path}`;
+    }
+    return raw;
+  }
+  if (raw.startsWith("/")) return `${origin}${raw}`;
+  return raw;
+}
+
+function collectNestedMobileMedia(value, output, seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectNestedMobileMedia(item, output, seen));
+    return;
+  }
+  const nestedId = value.id || value.asset_id || value.assetId || value.result_asset_id || value.resultAssetId;
+  const nestedUrl = value.url || value.asset_url || value.video_url || value.image_url || value.download_url || value.media_url || value.mediaUrl;
+  if (/^(img|vid)_[A-Za-z0-9._-]+$/.test(String(nestedId || "")) || /(img|vid)_[A-Za-z0-9._-]+/.test(String(nestedUrl || ""))) {
+    output.push(value);
+  }
+  Object.values(value).forEach((item) => collectNestedMobileMedia(item, output, seen));
+}
+
+function extractMobileMediaItems(data, baseUrl, defaultKind = "image") {
+  const rawItems = data?.data || data?.items || data?.images || data?.videos || data?.assets || data?.records || data?.results || data?.list || data?.rows || (Array.isArray(data) ? data : []);
+  const normalizedItems = Array.isArray(rawItems) ? [...rawItems] : [rawItems].filter(Boolean);
+  if (data?.video) normalizedItems.push(data.video);
+  if (data?.image) normalizedItems.push(data.image);
+  if (data?.result) normalizedItems.push(data.result);
+  if (data?.media) normalizedItems.push(data.media);
+  collectNestedMobileMedia(data, normalizedItems);
+  const origin = cleanBaseUrl(baseUrl);
+  const seen = new Set();
+  const output = [];
+  for (const item of normalizedItems) {
+    if (!item || typeof item !== "object") continue;
+    const id = String(item.id || item.asset_id || item.assetId || item.result_asset_id || item.resultAssetId || "");
+    const rawUrl = String(item.url || item.asset_url || item.video_url || item.image_url || item.download_url || item.media_url || item.mediaUrl || item.thumbnail_url || item.thumbnailUrl || "");
+    let url = rawUrl ? normalizeMobileMediaUrl(rawUrl, origin) : "";
+    const isVideoId = /^vid_/.test(id);
+    if (!url && /^(img|vid)_[A-Za-z0-9._-]+$/.test(id)) {
+      url = `${origin}/v1/media/${isVideoId ? "videos" : "images"}/${encodeURIComponent(id)}`;
+    }
+    if (!url) continue;
+    const urlKey = url.split("?")[0];
+    if (seen.has(urlKey)) continue;
+    seen.add(urlKey);
+    const kind = isVideoId || /\/videos?\//.test(url) || /video/i.test(item.mime_type || item.content_type || "") ? "video" : defaultKind;
+    output.push({
+      id: id || url,
+      url,
+      kind,
+      mime: item.mime_type || item.content_type || item.mimeType || (kind === "video" ? "video/mp4" : "image/jpeg"),
+      prompt: item.prompt || "",
+      model: item.model || ""
+    });
+  }
+  return output;
+}
+
+function extractAdminMediaItems(data, baseUrl, kind) {
+  const list = data?.data || data?.items || data?.records || data?.results || (Array.isArray(data) ? data : []);
+  if (!Array.isArray(list)) return [];
+  const origin = cleanBaseUrl(baseUrl);
+  const output = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const id = String(item.id || item.assetId || item.asset_id || "");
+    const rawUrl = String(item.url || item.mediaUrl || item.media_url || "");
+    const url = rawUrl
+      ? normalizeMobileMediaUrl(rawUrl, origin)
+      : (id ? `${origin}/v1/media/${kind === "video" ? "videos" : "images"}/${encodeURIComponent(id)}` : "");
+    if (!url) continue;
+    output.push({
+      id: id || url,
+      url,
+      kind,
+      mime: kind === "video" ? "video/mp4" : "image/jpeg",
+      prompt: item.prompt || "",
+      model: item.model || "",
+      createdAt: item.createdAt || item.created_at || Date.now()
+    });
+  }
+  return output;
+}
+
 function buildModelLists(models) {
   const ids = models.length ? models.map(normalizeModelOption) : Object.values(DEFAULT_MODELS);
   const chat = unique([...KNOWN_CHAT_MODELS, ...ids.filter((id) => /chat|grok-4|composer|build/i.test(id))]);
@@ -1097,5 +1376,17 @@ const styles = StyleSheet.create({
   modelArea: { gap: 8 },
   modelChips: { gap: 8, paddingVertical: 2 },
   choiceChip: { height: 40, paddingHorizontal: 16, borderRadius: 20, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff", justifyContent: "center", maxWidth: 220 },
-  choiceChipText: { color: "#22262d", fontWeight: "600" }
+  choiceChipText: { color: "#22262d", fontWeight: "600" },
+  galleryArea: { gap: 12 },
+  galleryGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  galleryItem: { width: "48%", backgroundColor: "#fff", borderWidth: 1, borderColor: "#e2e6eb", borderRadius: 10, overflow: "hidden" },
+  galleryThumb: { width: "100%", aspectRatio: 1, backgroundColor: "#e9edf2" },
+  galleryItemBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 8, gap: 6 },
+  galleryItemPrompt: { flex: 1, color: "#22262d", fontSize: 12 },
+  galleryDownload: { height: 28, paddingHorizontal: 10, borderRadius: 6, borderWidth: 1, borderColor: "#dfe3e8", justifyContent: "center" },
+  galleryDownloadText: { color: "#22262d", fontWeight: "600", fontSize: 12 },
+  previewBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)", alignItems: "center", justifyContent: "center", padding: 22 },
+  previewCard: { width: "100%", maxWidth: 520, backgroundColor: "#fff", borderRadius: 14, padding: 16, gap: 12 },
+  previewImage: { width: "100%", height: 380, borderRadius: 10, backgroundColor: "#e9edf2" },
+  previewTitle: { color: "#15171c", fontWeight: "600", lineHeight: 21 }
 });

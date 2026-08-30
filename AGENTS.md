@@ -213,3 +213,11 @@ docker logs --tail 20 grok-workbench-web
 - 工作流优化：`android-apk.yml` 与 `web-build.yml` 增加 push 路径过滤（`apps/mobile/**`、`apps/web/**`、`packages/**`、`package.json`、`package-lock.json`），以后仅文档/AGENTS.md 变更不再触发构建；iOS 仍为手动触发。
 - 本地产物：最新 Android 安装包 `dist-android/GrokWorkbench-v1.0.9-6.apk`；旧版 v1.0.9-3、v1.0.9-5 已移入 `dist-android/旧版本/`；iOS 最新为 `dist-ios/GrokWorkbench-v1.0.9-3-unsigned.ipa`，旧版在 `dist-ios/旧版本/`。
 - 部署：未改动服务器容器或镜像，Web 线上 1.0.9 保持不变。
+
+### 2026-08-30：移动端修复生成图片显示并新增图库（进行中）
+
+- 状态：进行中。
+- 目标：修复移动端生成图片无法显示的问题（媒体 URL 被解析成 Web 专属 `/asset/` 路径，移动端访问不到），并新增图库页展示历史图片/视频、支持打开与下载。
+- 版本：保持 `1.0.9`，只改移动端与 CI 产物，不动 Web 线上。
+- 侦察结论：Grok2API 媒体读取接口为 `GET /v1/media/images/{id}`（图片，无需鉴权）与 `GET /v1/media/videos/{id}`（视频）；生成接口返回的 url 形如 `http://127.0.0.1:8000/v1/media/images/xxx`；历史列表仅有管理端接口 `/api/admin/v1/media/images|videos?page=&pageSize=`（需管理员权限，普通客户端 Key 可能 401）。
+- 范围：`apps/mobile/App.js`、`apps/mobile/package.json`、根 `package-lock.json`、AGENTS.md；新增 `expo-file-system ~18.0.12` 与 `expo-sharing ~13.0.1` 用于下载/分享媒体。
