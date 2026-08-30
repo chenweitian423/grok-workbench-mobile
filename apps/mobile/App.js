@@ -280,15 +280,16 @@ export default function App() {
   async function claimToServer(items, meta = {}) {
     if (!wbToken || !Array.isArray(items) || !items.length) return;
     const valid = items
-      .map((item) => String(item?.id || ""))
-      .filter((id) => /^(img|vid)_[A-Za-z0-9._-]+$/.test(id));
-    if (!valid.length) return;
+      .map((item) => extractMobileAssetId(item?.id ?? item?.url))
+      .filter(Boolean);
+    const deduped = Array.from(new Set(valid));
+    if (!deduped.length) return;
     try {
       await rawJsonRequest(`${cleanBaseUrl(wbBaseUrl)}/ownership/claim`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...wbAuthHeaders() },
         body: JSON.stringify({
-          items: valid.map((id) => ({ id })),
+          items: deduped.map((id) => ({ id })),
           kind: meta.kind || "image",
           prompt: String(meta.prompt || ""),
           model: String(meta.model || "")
@@ -1518,6 +1519,13 @@ function normalizeMobileMediaUrl(value, baseUrl) {
   return raw;
 }
 
+function extractMobileAssetId(value) {
+  const text = String(value || "");
+  if (/^(img|vid)_[A-Za-z0-9._-]+$/.test(text)) return text;
+  const match = text.match(/(?:^|[/?])((?:img|vid)_[A-Za-z0-9._-]+)/);
+  return match ? match[1] : "";
+}
+
 function repairGalleryItem(item, baseUrl) {
   if (!item || typeof item !== "object") return null;
   const origin = cleanBaseUrl(baseUrl);
@@ -1559,6 +1567,14 @@ function extractMobileMediaItems(data, baseUrl, defaultKind = "image") {
   if (data?.image) normalizedItems.push(data.image);
   if (data?.result) normalizedItems.push(data.result);
   if (data?.media) normalizedItems.push(data.media);
+  if (data?.asset) normalizedItems.push(data.asset);
+  if (data?.result_asset) normalizedItems.push(data.result_asset);
+  if (data?.resultAsset) normalizedItems.push(data.resultAsset);
+  if (data?.result_asset_id || data?.resultAssetId) normalizedItems.push({
+    id: data.result_asset_id || data.resultAssetId,
+    asset_id: data.result_asset_id || data.resultAssetId,
+    assetId: data.result_asset_id || data.resultAssetId
+  });
   collectNestedMobileMedia(data, normalizedItems);
   const origin = cleanBaseUrl(baseUrl);
   const seen = new Set();
@@ -1568,9 +1584,10 @@ function extractMobileMediaItems(data, baseUrl, defaultKind = "image") {
     const id = String(item.id || item.asset_id || item.assetId || item.result_asset_id || item.resultAssetId || "");
     const rawUrl = String(item.url || item.asset_url || item.video_url || item.image_url || item.download_url || item.media_url || item.mediaUrl || item.thumbnail_url || item.thumbnailUrl || "");
     let url = rawUrl ? normalizeMobileMediaUrl(rawUrl, origin) : "";
-    const isVideoId = /^vid_/.test(id);
-    if (!url && /^(img|vid)_[A-Za-z0-9._-]+$/.test(id)) {
-      url = `${origin}/v1/media/${isVideoId ? "videos" : "images"}/${encodeURIComponent(id)}`;
+    const assetId = extractMobileAssetId(id) || extractMobileAssetId(rawUrl);
+    const isVideoId = /^vid_/.test(assetId);
+    if (!url && assetId) {
+      url = `${origin}/v1/media/${isVideoId ? "videos" : "images"}/${encodeURIComponent(assetId)}`;
     }
     if (!url) continue;
     const urlKey = url.split("?")[0];
@@ -1578,7 +1595,7 @@ function extractMobileMediaItems(data, baseUrl, defaultKind = "image") {
     seen.add(urlKey);
     const kind = isVideoId || /\/videos?\//.test(url) || /video/i.test(item.mime_type || item.content_type || "") ? "video" : defaultKind;
     output.push({
-      id: id || url,
+      id: assetId || id || url,
       url,
       kind,
       mime: item.mime_type || item.content_type || item.mimeType || (kind === "video" ? "video/mp4" : "image/jpeg"),

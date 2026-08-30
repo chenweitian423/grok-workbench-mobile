@@ -207,8 +207,9 @@ function extractAssetIds(data) {
     }
     if (typeof value === "object") {
       for (const key of ["id", "asset_id", "assetId", "result_asset_id", "resultAssetId"]) {
-        const id = String(value[key] || "");
-        if (/^(img|vid)_[A-Za-z0-9._-]+$/.test(id)) items.push(id);
+        const raw = String(value[key] || "");
+        const match = raw.match(/^(img|vid)_[A-Za-z0-9._-]+$/) || raw.match(/(?:^|[/?])((?:img|vid)_[A-Za-z0-9._-]+)/);
+        if (match) items.push(match[1] || match[0]);
       }
       for (const key of ["url", "asset_url", "video_url", "image_url", "download_url", "media_url", "mediaUrl"]) {
         const match = String(value[key] || "").match(/(img|vid)_[A-Za-z0-9._-]+/);
@@ -498,12 +499,10 @@ async function serveLibrary(req, res) {
   const directory = path.resolve(mediaRoot, config.dir);
 
   try {
-    if (kind === "video") {
-      const recentIds = await findRecentUnclaimedAssetIds(kind, Date.now() - 6 * 60 * 60 * 1000, 3);
-      if (recentIds.length) {
-        await recordAssetsForUser(session.user.id, recentIds, { kind });
-        session.db = await readAuthDb();
-      }
+    const recentIds = await findRecentUnclaimedAssetIds(kind, Date.now() - 6 * 60 * 60 * 1000, 3);
+    if (recentIds.length) {
+      await recordAssetsForUser(session.user.id, recentIds, { kind });
+      session.db = await readAuthDb();
     }
     const owned = session.db.assets
       .filter((asset) => asset.userId === session.user.id && asset.kind === kind)

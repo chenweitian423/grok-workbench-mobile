@@ -337,3 +337,17 @@ docker logs --tail 20 grok-workbench-web
   - 线上真实数据核对（容器内执行 inspect-library.mjs / inspect-library-live.mjs）：sky 账号 db 83 条（图 60 + 视频 23），实际可读 52 条（图 49 + 视频 3），移动端解析+修复后仍为 52、无重复无丢失；“同步 52 显示 50”的差异即来自 31 条无媒体文件的失效记录，移动端现在会在同步结果里明确显示分类计数与“服务器历史 N 条，可查看 M 条”。
   - 回滚点：`web-grok-workbench-web:1.0.12-before-gallery-keyboard-video`（镜像 `197385bace4c`）；源码备份 `/opt/grok-workbench/backups/1.0.12-before-gallery-keyboard-video-20260830/`。
 - 遗留：真实设备验证建议重点检查：① 设置页/聊天输入框在键盘弹出时不再被遮挡；② 视频页时长/比例/分辨率 chips 生效、视频库能拉到历史、提交后能看到“实际发送的提示词”；③ 图库同步状态显示分类计数；④ 提示词页生成后再去图片/视频页新输入，不会被旧生成文案覆盖；⑤ 历史积压的 31 条（sky 11 图 + 20 视频）及其它账号的失效记录仍在 auth.json 中（不影响展示，`/library` 已按可读过滤），如需彻底清理需用户确认后写清理脚本。
+
+### 2026-08-30：图库同步缺图与视频提示词关联排查（进行中）
+
+- 状态：进行中。
+- 目标：① 排查并修复“移动端生成的图片在磁盘存在但移动端/Web 图库都同步不到”的归属链路问题（示例 `img_2aPlDe-lXqKnh0vvfKRwPUg2trdm7Fjr`）；② 核实最近一条视频生成时后端实际收到的提示词，判断内容与提示词无关是客户端问题还是上游模型问题。
+- 预期版本：全仓统一 `1.0.14`（若本轮修复功能/接口行为则必须升版）。
+- 范围：`apps/web/server.mjs`、`packages/core/src/index.js`、`apps/mobile/App.js`、版本元数据、AGENTS.md；Web 容器需重新构建并部署。
+- 已侦察结论（图片未同步根因）：
+  - 服务器确认 `img_2aPlDe-...` 确实存在于磁盘 `/grok2api-data/media/images/im/img_2aPlDe-lXqKnh0vvfKRwPUg2trdm7Fjr.jpg`（259863 字节，12:00 落盘），但 auth.json 中没有任何记录，即该资产从未被归属到任何账号。
+  - 移动端生成链路：`api.generateImage` → `extractMobileMediaItems(data, baseUrl, "image")` → `addToGallery` + `claimToServer`；只要 items 为空，claim 不发生，图库也不记录。
+  - 最可能根因：Grok2API 图片生成接口的返回结构与移动端解析不完全兼容（只提取有限的字段名/层级），导致 `extractMobileMediaItems` 拿到空列表。
+  - Web 端 `/library` 只从 auth.json 返回，该图从未入库，所以 Web 端同样没有；不是 Web 端单独 bug，是同一归属失败根因。
+- 待确认：真实图片生成接口的响应 JSON 结构（参考 Grok2API 开源仓库 `chenyme/grok2api` 的 `/v1/images/generations` handler 或实际打一次请求）；最近一条视频在 `media_jobs` 表里的实际 prompt/模型/状态。
+- 风险：历史已落盘但未归属的图片回填涉及归属歧义，需用户确认策略后再执行；真实模型调用可能消耗额度。
