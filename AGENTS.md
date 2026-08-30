@@ -238,9 +238,9 @@ docker logs --tail 20 grok-workbench-web
 - 清理：删除被取代的旧构建记录（Android v6、iOS v3、旧 Web），GitHub 仅保留最新 Web / Android v7 / iOS v4 三条。
 - 遗留：图库的“同步服务器媒体”依赖客户端 Key 是否拥有 Grok2API 管理权限；若 401 则只能显示本机生成记录（本机记录已覆盖移动端自己的生成历史）。真实设备验证仍建议重点检查：生成后立即显示、图库缩略图、点击大图、下载保存。
 
-### 2026-08-30：移动端图库同步与相册下载修复（进行中）
+### 2026-08-30：移动端图库同步与相册下载修复
 
-- 状态：进行中。
+- 状态：已完成。
 - 目标：修复图库“同步服务器媒体”拿不到服务器图片，以及生成图片点击下载报错/无法保存到系统相册的问题；用户已将 Grok2API 地址改为公网 `https://grok.sky423.cn:18888`。
 - 版本：移动端升 `1.0.10`；Web 线上保持 `1.0.9` 不动。本次为移动端专属版本：只改 `apps/mobile/package.json`、`apps/mobile/app.json`、移动端 CI 版本读取和 `App.js`，不触碰 Web 源码与部署基线（根 `package.json` 仍为 1.0.9，作为例外在交付说明中记录）。
 - 侦察结论：
@@ -251,3 +251,13 @@ docker logs --tail 20 grok-workbench-web
 - 方案：设置页新增“管理端账号/密码”（仅本机持久化，不写入本文件）；同步时先登录拿 accessToken 再拉媒体列表；视频用 `assetID` 拼 URL；下载改为 `expo-media-library` 的 `saveToLibraryAsync` 直接存相册，下载前按当前 baseUrl 重建旧记录 URL。
 - 范围：`apps/mobile/App.js`、`apps/mobile/package.json`、`apps/mobile/app.json`、根 `package-lock.json`、`android-apk.yml`、`ios-unsigned-ipa.yml`、AGENTS.md。
 - 风险：管理端登录依赖用户提供正确的管理员账号密码；真实设备上的相册权限授权需要用户实测确认。
+- 完成内容：
+  - 设置页新增“管理端账号/密码”输入（仅 AsyncStorage 本机保存，不写入本文件、不上传服务器）。
+  - 图库“同步服务器媒体”改为：无管理端凭据时提示去设置填写；有凭据时先 `POST /api/admin/v1/auth/login` 拿 `accessToken`（带过期时间缓存），再带 `Authorization: Bearer` 拉图片/视频列表；视频只同步 `completed` 且带 `vid_` 资源 ID 的任务，URL 直接用 `assetId` 构造。
+  - 下载改为：下载前用 `repairGalleryItem` 按当前 Grok2API 地址重建 URL（旧记录里的 `127.0.0.1`、`/asset/`、旧内网地址都会被修正）；`expo-media-library` 的 `requestPermissionsAsync(true)` + `saveToLibraryAsync` 直接写入系统相册；权限被拒时回退系统分享；data URL 用 Base64 写文件兜底。
+  - 版本：移动端 `1.0.10`（`app.json` version/buildNumber、Android versionCode 10010）；Android/iOS CI 的版本读取改为 `apps/mobile/package.json`；新增 `expo-media-library ~17.0.6`（SDK 52 配套）；iOS 增加 `NSPhotoLibraryAddUsageDescription`，Android 增加 `WRITE_EXTERNAL_STORAGE`。
+- 验证：本地 `npx expo export --platform android` 通过（590 模块）；`npm run build:web` 通过（1577 模块，Web 基线未变）；`npx expo config` 确认 1.0.10/versionCode 10010/权限生效；登录与媒体接口字段已对照开源源码确认（`tokens.accessToken`、图片 `items[].url`、视频 `items[].assetId`）。
+- 构建产物：Android run 33293185228 成功，`dist-android/GrokWorkbench-v1.0.10-8.apk`（约 65 MB）；iOS run 33293189087 成功，`dist-ios/GrokWorkbench-v1.0.10-5-unsigned.ipa`（约 5.8 MB）；APK 含 classes.dex/lib、IPA 含 Payload 结构校验通过。旧版 v1.0.9-7 APK 与 v1.0.9-4 IPA 已移入各自 `旧版本/` 子目录。
+- 清理：删除被取代的旧构建记录（Android v7、iOS v4、旧 Web），GitHub 仅保留最新 Web（33293185279）/ Android v1.0.10-8 / iOS v1.0.10-5 三条。
+- 部署：未改动任何服务器容器或镜像，Web 线上 1.0.9 保持不变；本文件已同步到服务器 `/opt/grok-workbench/AGENTS.md`。
+- 遗留：真实设备验证建议重点检查：设置页填管理端账号密码后“同步服务器媒体”能拉到服务器历史图片/视频；生成图片点击下载能直接写入系统相册（首次会弹权限）；公网地址下旧图库记录能正常显示与下载。
