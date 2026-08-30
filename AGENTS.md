@@ -310,7 +310,7 @@ docker logs --tail 20 grok-workbench-web
 
 ### 2026-08-30：图库计数修复、键盘遮挡优化、视频参数/视频库对齐 Web 与提示词链路排查（进行中）
 
-- 状态：进行中。
+- 状态：已完成。
 - 目标：① 排查并修复图库“同步 52 条但只显示 50 条”的计数与展示逻辑；② 优化设置页密钥输入、聊天输入框被输入法遮挡的问题；③ 移动端视频页对齐 Web：补齐时长/比例/分辨率参数、新增视频库（图库同款），并核实手机生成视频时后端实际收到的提示词。
 - 预期版本：全仓统一 `1.0.13`；Web 需重新构建并部署（server.mjs 的 `/library` 返回结构与归属校验有变化）。
 - 范围：`apps/web/server.mjs`、`apps/mobile/App.js`、`apps/mobile/app.json`、版本元数据、AGENTS.md。
@@ -329,4 +329,11 @@ docker logs --tail 20 grok-workbench-web
   - 修复提示词覆盖：移动端与 Web 端在创作页手动修改输入框时清空旧的 generatedPrompt，避免“提示词页生成过的旧文案”覆盖新输入；`generatedPrompt || input` 仅在用户未输入时兜底使用。
   - 键盘遮挡：App 主布局外包 KeyboardAvoidingView（iOS padding），app.json Android 增加 `softwareKeyboardLayoutMode: resize`，主 ScrollView 增加 `keyboardShouldPersistTaps="handled"`。
 - 本地验证：`npm run build:web` 通过（1577 模块）；`npx expo export --platform android` 通过（590 模块）；版本元数据已统一 1.0.13。
-- 待办：提交推送触发 CI（Web/Android 自动、iOS 手动）；下载 APK/IPA 归档；同步服务器正确源码并部署 Web 候选镜像；线上功能标记与 `/library` 计数验证；收尾后把本条改为“已完成”。
+- 交付与验证：
+  - 本地构建：`npm run build:web` 通过（1577 模块）；`npx expo export --platform android` 通过（590 模块）。
+  - 版本：全仓统一 `1.0.13`（根/Web/移动端/核心 `APP_VERSION`/`app.json`/`versionCode 10013`/锁文件，已用 rg 核对无残留）。
+  - CI：提交 `f9befb2` 推送后 Web 构建成功（run 33311260672）；Android APK 构建成功（run 33311260687，`dist-android/GrokWorkbench-v1.0.13-11.apk`，约 65 MB，含 classes.dex/lib）；iOS 未签名 IPA 构建成功（run 33311269022，`dist-ios/GrokWorkbench-v1.0.13-8-unsigned.ipa`，约 5.8 MB，含 Payload/GrokWorkbench.app）。旧 v1.0.12-10 APK 与 v1.0.12-7 IPA 已移入各自 `旧版本/` 子目录；已删除被取代的 v1.0.12 三条构建记录，GitHub 仅保留最新 Web / Android v13-11 / iOS v13-8。
+  - 部署：源码已同步服务器 `/opt/grok-workbench` 并通过 SHA256 一致性校验；候选镜像 `web-grok-workbench-web:1.0.13-candidate`（`d857c8212535`）在临时端口 38697 验证通过（首页 200、`/auth/me` 200、匿名 `/library` 401、JS 含 1.0.13 与音乐/视频库/参考图/聊天标记、`/library` 返回 `{data,total,available}`、伪造无文件资产 claim 后 `total` 保持 0）；已 `docker compose up -d --no-build --force-recreate` 正式上线，线上容器镜像 `sha256:d857c8212535...`，首页 200、`/auth/me` 200、匿名 `/library` 401，日志正常，数据卷继续挂载 `web_grok-workbench-data:/app/data` 与只读 `grok2api_grok2api-data:/grok2api-data`。
+  - 线上真实数据核对（容器内执行 inspect-library.mjs / inspect-library-live.mjs）：sky 账号 db 83 条（图 60 + 视频 23），实际可读 52 条（图 49 + 视频 3），移动端解析+修复后仍为 52、无重复无丢失；“同步 52 显示 50”的差异即来自 31 条无媒体文件的失效记录，移动端现在会在同步结果里明确显示分类计数与“服务器历史 N 条，可查看 M 条”。
+  - 回滚点：`web-grok-workbench-web:1.0.12-before-gallery-keyboard-video`（镜像 `197385bace4c`）；源码备份 `/opt/grok-workbench/backups/1.0.12-before-gallery-keyboard-video-20260830/`。
+- 遗留：真实设备验证建议重点检查：① 设置页/聊天输入框在键盘弹出时不再被遮挡；② 视频页时长/比例/分辨率 chips 生效、视频库能拉到历史、提交后能看到“实际发送的提示词”；③ 图库同步状态显示分类计数；④ 提示词页生成后再去图片/视频页新输入，不会被旧生成文案覆盖；⑤ 历史积压的 31 条（sky 11 图 + 20 视频）及其它账号的失效记录仍在 auth.json 中（不影响展示，`/library` 已按可读过滤），如需彻底清理需用户确认后写清理脚本。
