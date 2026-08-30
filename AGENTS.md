@@ -237,3 +237,17 @@ docker logs --tail 20 grok-workbench-web
 - 构建产物：Android run 33292012524 成功，`dist-android/GrokWorkbench-v1.0.9-7.apk`；iOS run 33292016047 成功，`dist-ios/GrokWorkbench-v1.0.9-4-unsigned.ipa`；旧版安装包已移入各自 `旧版本/` 子目录。
 - 清理：删除被取代的旧构建记录（Android v6、iOS v3、旧 Web），GitHub 仅保留最新 Web / Android v7 / iOS v4 三条。
 - 遗留：图库的“同步服务器媒体”依赖客户端 Key 是否拥有 Grok2API 管理权限；若 401 则只能显示本机生成记录（本机记录已覆盖移动端自己的生成历史）。真实设备验证仍建议重点检查：生成后立即显示、图库缩略图、点击大图、下载保存。
+
+### 2026-08-30：移动端图库同步与相册下载修复（进行中）
+
+- 状态：进行中。
+- 目标：修复图库“同步服务器媒体”拿不到服务器图片，以及生成图片点击下载报错/无法保存到系统相册的问题；用户已将 Grok2API 地址改为公网 `https://grok.sky423.cn:18888`。
+- 版本：移动端升 `1.0.10`；Web 线上保持 `1.0.9` 不动。本次为移动端专属版本：只改 `apps/mobile/package.json`、`apps/mobile/app.json`、移动端 CI 版本读取和 `App.js`，不触碰 Web 源码与部署基线（根 `package.json` 仍为 1.0.9，作为例外在交付说明中记录）。
+- 侦察结论：
+  - 同步失败根因：`/api/admin/v1/media/images|videos` 是 Grok2API 管理端接口，要求管理员 JWT（源码确认中间件优先读 `Authorization: Bearer`，普通客户端 Key 必然 401 `adminUnauthorized`）。
+  - 公网反代验证：`https://grok.sky423.cn:18888` 证书有效；`/healthz` 200；`/v1/media/images/{id}` 免鉴权可读；`POST /api/admin/v1/auth/login` 可达（错误时返回 400/401）。登录成功返回 `tokens.accessToken`，可直接带 Bearer 调管理端接口，无需 Cookie。
+  - 下载报错根因：旧图库记录可能存有 `http://127.0.0.1:8000/...` 或 `/asset/...` 失效路径；且当前实现用 expo-sharing 分享，不会直接写入系统相册。
+  - 管理端视频列表返回的是任务对象（`assetID` 才是媒体资源 ID），旧解析按任务 ID 拼 URL 会 404。
+- 方案：设置页新增“管理端账号/密码”（仅本机持久化，不写入本文件）；同步时先登录拿 accessToken 再拉媒体列表；视频用 `assetID` 拼 URL；下载改为 `expo-media-library` 的 `saveToLibraryAsync` 直接存相册，下载前按当前 baseUrl 重建旧记录 URL。
+- 范围：`apps/mobile/App.js`、`apps/mobile/package.json`、`apps/mobile/app.json`、根 `package-lock.json`、`android-apk.yml`、`ios-unsigned-ipa.yml`、AGENTS.md。
+- 风险：管理端登录依赖用户提供正确的管理员账号密码；真实设备上的相册权限授权需要用户实测确认。

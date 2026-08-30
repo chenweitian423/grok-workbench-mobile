@@ -30,7 +30,7 @@ jobs:
       - name: Package IPA
         id: package
         run: |
-          VERSION=$(node -p "require('./package.json').version")
+          VERSION=$(node -p "require('./apps/mobile/package.json').version")
           APP_PATH=$(find apps/mobile/build -path "*/Release-iphoneos/*.app" -type d | head -n 1)
           mkdir -p Payload artifacts
           cp -R "$APP_PATH" Payload/GrokWorkbench.app
@@ -40,4 +40,3 @@ jobs:
         with:
           name: GrokWorkbench-iOS-v${{ steps.package.outputs.version }}-${{ github.run_number }}-unsigned
           path: artifacts/*.ipa
-

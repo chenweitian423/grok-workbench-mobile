@@ -2,25 +2,29 @@
   "expo": {
     "name": "Grok Workbench",
     "slug": "grok-workbench",
-    "version": "1.0.9",
+    "version": "1.0.10",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "cn.sky423.grokworkbench",
-      "buildNumber": "1.0.9",
+      "buildNumber": "1.0.10",
       "supportsTablet": true,
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
-        }
+        },
+        "NSPhotoLibraryAddUsageDescription": "用于把生成的图片和视频保存到系统相册。"
       }
     },
     "android": {
       "package": "cn.sky423.grokworkbench",
-      "versionCode": 10009,
+      "versionCode": 10010,
       "usesCleartextTraffic": true,
+      "permissions": [
+        "WRITE_EXTERNAL_STORAGE"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"

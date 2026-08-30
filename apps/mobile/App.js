@@ -6,12 +6,14 @@ import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
+import * as MediaLibrary from "expo-media-library";
 import * as Sharing from "expo-sharing";
 import { StatusBar } from "expo-status-bar";
-import { APP_VERSION, DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, PROMPT_WORKFLOWS, buildVideoGenerationBody, extractJobId } from "@grok-workbench/core";
+import { DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, PROMPT_WORKFLOWS, buildVideoGenerationBody, extractJobId } from "@grok-workbench/core";
 
 const SETTINGS_KEY = "grok-workbench-mobile-settings";
 const GALLERY_KEY = "grok-workbench-mobile-gallery";
+const MOBILE_APP_VERSION = "1.0.10";
 
 const TABS = [
   { id: "prompt", label: "提示词" },
@@ -96,6 +98,10 @@ const MUSIC_LENGTH_PROFILES = {
 export default function App() {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_SERVER_BASE_URL);
   const [apiKey, setApiKey] = useState("");
+  const [adminUser, setAdminUser] = useState("");
+  const [adminPass, setAdminPass] = useState("");
+  const [adminToken, setAdminToken] = useState("");
+  const [adminTokenExpiresAt, setAdminTokenExpiresAt] = useState("");
   const [models, setModels] = useState([]);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [mode, setMode] = useState("prompt");
@@ -135,6 +141,10 @@ export default function App() {
   const api = useMemo(() => new GrokApi({ baseUrl, apiKey }), [baseUrl, apiKey]);
   const workflow = PROMPT_WORKFLOWS.find((item) => item.id === workflowId) || PROMPT_WORKFLOWS[1];
   const modelLists = useMemo(() => buildModelLists(models), [models]);
+  const galleryItems = useMemo(
+    () => (Array.isArray(gallery) ? gallery.map((item) => repairGalleryItem(item, baseUrl)).filter(Boolean) : []),
+    [gallery, baseUrl]
+  );
 
   useEffect(() => {
     (async () => {
@@ -144,6 +154,10 @@ export default function App() {
           const saved = JSON.parse(raw);
           if (saved.baseUrl) setBaseUrl(saved.baseUrl);
           if (saved.apiKey) setApiKey(saved.apiKey);
+          if (saved.adminUser) setAdminUser(saved.adminUser);
+          if (saved.adminPass) setAdminPass(saved.adminPass);
+          if (saved.adminToken) setAdminToken(saved.adminToken);
+          if (saved.adminTokenExpiresAt) setAdminTokenExpiresAt(saved.adminTokenExpiresAt);
           if (Array.isArray(saved.models) && saved.models.length) setModels(saved.models);
         }
       } catch {}
@@ -162,8 +176,8 @@ export default function App() {
 
   useEffect(() => {
     if (!settingsLoaded) return undefined;
-    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey, models })).catch(() => {});
-  }, [settingsLoaded, baseUrl, apiKey, models]);
+    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey, models, adminUser, adminPass, adminToken, adminTokenExpiresAt })).catch(() => {});
+  }, [settingsLoaded, baseUrl, apiKey, models, adminUser, adminPass, adminToken, adminTokenExpiresAt]);
 
   useEffect(() => {
     AsyncStorage.setItem(GALLERY_KEY, JSON.stringify(gallery)).catch(() => {});
@@ -191,7 +205,7 @@ export default function App() {
 
   async function saveSettings() {
     try {
-      await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey, models }));
+      await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ baseUrl, apiKey, models, adminUser, adminPass, adminToken, adminTokenExpiresAt }));
       setStatus("设置已保存");
     } catch (error) {
       setStatus(`保存失败：${error.message}`);
@@ -443,17 +457,40 @@ export default function App() {
   }
 
   async function syncServerGallery() {
-    if (!requireKey()) return;
+    if (!adminUser.trim() || !adminPass.trim()) {
+      setStatus("请先在设置里填写管理端账号和密码，再同步服务器媒体");
+      return;
+    }
     setGalleryLoading(true);
     try {
+      let accessToken = adminToken;
+      if ((!accessToken || !adminTokenExpiresAt || Date.now() >= new Date(adminTokenExpiresAt).getTime()) && adminUser.trim() && adminPass.trim()) {
+        setStatus("正在登录管理端同步媒体");
+        const loginData = await rawJsonRequest(`${cleanBaseUrl(baseUrl)}/api/admin/v1/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: adminUser.trim(), password: adminPass })
+        });
+        const tokens = loginData?.tokens;
+        if (!tokens?.accessToken) throw new Error("管理端登录未返回令牌");
+        accessToken = tokens.accessToken;
+        setAdminToken(accessToken);
+        setAdminTokenExpiresAt(tokens.accessTokenExpiresAt || "");
+      }
+      const adminHeaders = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
       let imageData = null;
       let videoData = null;
+      const errors = [];
       try {
-        imageData = await api.request("/api/admin/v1/media/images?page=1&pageSize=100");
-      } catch {}
+        imageData = await rawJsonRequest(`${cleanBaseUrl(baseUrl)}/api/admin/v1/media/images?page=1&pageSize=100`, { headers: adminHeaders });
+      } catch (error) {
+        errors.push(error.message);
+      }
       try {
-        videoData = await api.request("/api/admin/v1/media/videos?page=1&pageSize=100");
-      } catch {}
+        videoData = await rawJsonRequest(`${cleanBaseUrl(baseUrl)}/api/admin/v1/media/videos?page=1&pageSize=100`, { headers: adminHeaders });
+      } catch (error) {
+        errors.push(error.message);
+      }
       const serverItems = [
         ...extractAdminMediaItems(imageData, baseUrl, "image"),
         ...extractAdminMediaItems(videoData, baseUrl, "video")
@@ -468,11 +505,13 @@ export default function App() {
           return next.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 300);
         });
         setStatus(`已同步服务器媒体 ${serverItems.length} 条`);
+      } else if (errors.length) {
+        setStatus(`同步失败：${errors[0]}`);
       } else {
-        setStatus("服务器接口无返回或当前 Key 无管理权限，仅显示本机生成记录");
+        setStatus("服务器没有可同步的媒体");
       }
     } catch (error) {
-      setStatus(error.message);
+      setStatus(`同步失败：${error.message}`);
     } finally {
       setGalleryLoading(false);
     }
@@ -480,23 +519,34 @@ export default function App() {
 
   async function downloadMedia(item) {
     if (!item?.url) return setStatus("没有可下载的媒体");
+    const repaired = repairGalleryItem(item, baseUrl);
+    const url = repaired?.url || item.url;
     setStatus(item.kind === "video" ? "正在下载视频" : "正在下载图片");
     try {
-      const ext = item.kind === "video" ? "mp4" : "jpg";
-      const fileUri = `${FileSystem.cacheDirectory}grok-${item.kind}-${Date.now()}.${ext}`;
-      const download = await FileSystem.downloadAsync(item.url, fileUri);
-      if (download.status !== 200) throw new Error(`下载失败（${download.status}）`);
-      if (await Sharing.isAvailableAsync()) {
+      const fileUri = `${FileSystem.cacheDirectory}grok-${item.kind || "image"}-${Date.now()}.${item.kind === "video" ? "mp4" : "jpg"}`;
+      if (url.startsWith("data:")) {
+        const match = url.match(/^data:[^;]+;base64,(.*)$/s);
+        if (!match) throw new Error("不支持的数据格式");
+        await FileSystem.writeAsStringAsync(fileUri, match[1], { encoding: FileSystem.EncodingType.Base64 });
+      } else {
+        const download = await FileSystem.downloadAsync(url, fileUri);
+        if (download.status !== 200) throw new Error(`下载失败（${download.status}）`);
+      }
+      const permission = await MediaLibrary.requestPermissionsAsync(true);
+      if (permission.granted || permission.accessPrivileges === "all") {
+        await MediaLibrary.saveToLibraryAsync(fileUri);
+        setStatus(item.kind === "video" ? "视频已保存到系统相册" : "图片已保存到系统相册");
+      } else if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(fileUri, {
           mimeType: item.kind === "video" ? "video/mp4" : "image/jpeg",
           dialogTitle: "保存 Grok 媒体"
         });
-        setStatus("已保存到相册或文件");
+        setStatus("相册权限未开启，已改用系统分享保存");
       } else {
-        setStatus(`已下载：${fileUri}`);
+        setStatus(`已下载到缓存：${fileUri}`);
       }
     } catch (error) {
-      setStatus(error.message);
+      setStatus(`下载失败：${error.message}`);
     }
   }
 
@@ -571,7 +621,7 @@ export default function App() {
         <Image source={require("./assets/icon.png")} style={styles.logo} />
         <View>
           <Text style={styles.title}>Grok Workbench</Text>
-          <Text style={styles.version}>v{APP_VERSION}</Text>
+          <Text style={styles.version}>v{MOBILE_APP_VERSION}</Text>
         </View>
       </View>
 
@@ -586,7 +636,7 @@ export default function App() {
       <Text style={styles.status}>{status}</Text>
 
       {mode === "settings" ? (
-        <SettingsWorkspace baseUrl={baseUrl} setBaseUrl={setBaseUrl} apiKey={apiKey} setApiKey={setApiKey} saveSettings={saveSettings} loadModels={loadModels} models={models} busy={busy} />
+        <SettingsWorkspace baseUrl={baseUrl} setBaseUrl={setBaseUrl} apiKey={apiKey} setApiKey={setApiKey} adminUser={adminUser} setAdminUser={setAdminUser} adminPass={adminPass} setAdminPass={setAdminPass} saveSettings={saveSettings} loadModels={loadModels} models={models} busy={busy} />
       ) : mode === "prompt" ? (
         <PromptWorkspace
           workflow={workflow}
@@ -658,7 +708,7 @@ export default function App() {
         />
       ) : mode === "gallery" ? (
         <GalleryWorkspace
-          gallery={gallery}
+          gallery={galleryItems}
           loading={galleryLoading}
           sync={syncServerGallery}
           download={downloadMedia}
@@ -723,18 +773,22 @@ export default function App() {
   );
 }
 
-function SettingsWorkspace({ baseUrl, setBaseUrl, apiKey, setApiKey, saveSettings, loadModels, models, busy }) {
+function SettingsWorkspace({ baseUrl, setBaseUrl, apiKey, setApiKey, adminUser, setAdminUser, adminPass, setAdminPass, saveSettings, loadModels, models, busy }) {
   return (
     <View style={styles.workspace}>
       <Text style={styles.label}>Grok2API 地址</Text>
       <TextInput value={baseUrl} onChangeText={setBaseUrl} style={styles.input} autoCapitalize="none" placeholder="http://192.168.123.195:38695" />
       <Text style={styles.label}>完整客户端 Key</Text>
       <TextInput value={apiKey} onChangeText={setApiKey} style={styles.input} autoCapitalize="none" secureTextEntry placeholder="sk-..." />
+      <Text style={styles.label}>管理端账号（用于同步服务器图库）</Text>
+      <TextInput value={adminUser} onChangeText={setAdminUser} style={styles.input} autoCapitalize="none" placeholder="admin" />
+      <Text style={styles.label}>管理端密码（仅保存在本机）</Text>
+      <TextInput value={adminPass} onChangeText={setAdminPass} style={styles.input} autoCapitalize="none" secureTextEntry placeholder="Grok2API 管理后台密码" />
       <View style={styles.actions}>
         <Pressable style={styles.primary} onPress={saveSettings}><Text style={styles.primaryText}>保存设置</Text></Pressable>
         <Pressable style={styles.button} onPress={loadModels} disabled={busy}><Text style={styles.buttonText}>{busy ? "读取中..." : "获取模型"}</Text></Pressable>
       </View>
-      <Text style={styles.hint}>已获取 {models.length} 个模型。获取模型后会按类型自动填入各功能页，也可以手动切换。</Text>
+      <Text style={styles.hint}>已获取 {models.length} 个模型。管理端账号用于“图库 → 同步服务器媒体”拉取服务器历史，请填写 Grok2API 管理后台（端口 38695 /admin）的登录账号。</Text>
     </View>
   );
 }
@@ -1156,6 +1210,22 @@ function cleanBaseUrl(baseUrl) {
   return String(baseUrl || "").trim().replace(/\/+$/, "");
 }
 
+async function rawJsonRequest(url, options = {}) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+  if (!response.ok) {
+    const message = data?.error?.message || data?.message || response.statusText || "请求失败";
+    throw new Error(`${response.status} ${message}`);
+  }
+  return data;
+}
+
 function normalizeMobileMediaUrl(value, baseUrl) {
   const raw = String(value || "");
   if (!raw) return "";
@@ -1171,6 +1241,25 @@ function normalizeMobileMediaUrl(value, baseUrl) {
   }
   if (raw.startsWith("/")) return `${origin}${raw}`;
   return raw;
+}
+
+function repairGalleryItem(item, baseUrl) {
+  if (!item || typeof item !== "object") return null;
+  const origin = cleanBaseUrl(baseUrl);
+  const kind = item.kind === "video" ? "video" : "image";
+  const id = String(item.id || item.assetId || item.asset_id || "");
+  let url = String(item.url || "");
+  if (/^(img|vid)_[A-Za-z0-9._-]+$/.test(id)) {
+    url = `${origin}/v1/media/${kind === "video" ? "videos" : "images"}/${encodeURIComponent(id)}`;
+  } else {
+    url = normalizeMobileMediaUrl(url, origin);
+    const assetMatch = url.match(/(?:^|\/)((?:img|vid)_[A-Za-z0-9._-]+)(?:$|\?)/);
+    if (assetMatch) {
+      url = `${origin}/v1/media/${kind === "video" ? "videos" : "images"}/${assetMatch[1]}`;
+    }
+  }
+  if (!url) return null;
+  return { ...item, id: id || url, url, kind };
 }
 
 function collectNestedMobileMedia(value, output, seen = new Set()) {
@@ -1226,26 +1315,41 @@ function extractMobileMediaItems(data, baseUrl, defaultKind = "image") {
 }
 
 function extractAdminMediaItems(data, baseUrl, kind) {
-  const list = data?.data || data?.items || data?.records || data?.results || (Array.isArray(data) ? data : []);
+  const list = data?.items || data?.data || data?.records || data?.results || (Array.isArray(data) ? data : []);
   if (!Array.isArray(list)) return [];
   const origin = cleanBaseUrl(baseUrl);
   const output = [];
   for (const item of list) {
     if (!item || typeof item !== "object") continue;
+    if (kind === "video") {
+      if (String(item.status || "") && String(item.status) !== "completed") continue;
+      const assetId = String(item.assetID || item.asset_id || item.resultAssetId || item.result_asset_id || item.assetId || "");
+      if (!/^vid_/.test(assetId)) continue;
+      output.push({
+        id: assetId,
+        url: `${origin}/v1/media/videos/${encodeURIComponent(assetId)}`,
+        kind: "video",
+        mime: "video/mp4",
+        prompt: item.prompt || "",
+        model: item.model || "",
+        createdAt: new Date(item.completedAt || item.createdAt || Date.now()).getTime()
+      });
+      continue;
+    }
     const id = String(item.id || item.assetId || item.asset_id || "");
     const rawUrl = String(item.url || item.mediaUrl || item.media_url || "");
     const url = rawUrl
       ? normalizeMobileMediaUrl(rawUrl, origin)
-      : (id ? `${origin}/v1/media/${kind === "video" ? "videos" : "images"}/${encodeURIComponent(id)}` : "");
+      : (id ? `${origin}/v1/media/images/${encodeURIComponent(id)}` : "");
     if (!url) continue;
     output.push({
       id: id || url,
       url,
-      kind,
-      mime: kind === "video" ? "video/mp4" : "image/jpeg",
+      kind: "image",
+      mime: item.mimeType || item.mime_type || item.content_type || "image/jpeg",
       prompt: item.prompt || "",
       model: item.model || "",
-      createdAt: item.createdAt || item.created_at || Date.now()
+      createdAt: new Date(item.createdAt || item.created_at || Date.now()).getTime()
     });
   }
   return output;
