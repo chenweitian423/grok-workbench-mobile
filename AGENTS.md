@@ -262,9 +262,9 @@ docker logs --tail 20 grok-workbench-web
 - 部署：未改动任何服务器容器或镜像，Web 线上 1.0.9 保持不变；本文件已同步到服务器 `/opt/grok-workbench/AGENTS.md`。
 - 遗留：真实设备验证建议重点检查：设置页填管理端账号密码后“同步服务器媒体”能拉到服务器历史图片/视频；生成图片点击下载能直接写入系统相册（首次会弹权限）；公网地址下旧图库记录能正常显示与下载。
 
-### 2026-08-30：移动端接入工作台账号系统与下载修复（进行中）
+### 2026-08-30：移动端接入工作台账号系统与下载修复
 
-- 状态：进行中。
+- 状态：已完成。
 - 目标：按用户反馈重构移动端图库方案：① 不再用 Grok2API 管理端账号同步（普通客户端 Key 永远无管理权限），改为和 Web 端一致的工作台注册/登录，图库按账号隔离，每个人只看自己的历史；② 修复 iOS 下载报错 `NSURLErrorDomain -3000 Cannot create file`。
 - 版本：全仓统一升 `1.0.11`（根、Web、移动端、core、锁文件、`APP_VERSION`、`app.json`、versionCode 10011）。上一轮移动端临时 `1.0.10` 仅为过渡，本轮统一回同版本。Web 需要重新构建并部署（server.mjs 有接口行为变化）。
 - 服务端改动（`apps/web/server.mjs`）：登录/注册响应体新增 `token` 字段；`getSessionUser` 同时接受 `Authorization: Bearer` / `X-GW-Token` 头（Cookie 兼容保留，Web 端不受影响）。本地已端到端验证：注册返回 token、带 token 读 `/library` 200、无 token 401、退出登录正常。
@@ -275,3 +275,16 @@ docker logs --tail 20 grok-workbench-web
   - 下载修复：弃用 `FileSystem.downloadAsync`（iOS 后台下载任务会报 -3000），改为 `fetch` + `blob` + Base64 `writeAsStringAsync` 落盘，再 `MediaLibrary.saveToLibraryAsync` 存相册，权限拒绝时回退分享。
 - 风险：工作台默认内网地址，手机在外网时需在设置里填工作台公网地址（或连内网 Wi-Fi）；Web 部署必须保留数据卷与旧镜像回滚标签。
 - 范围：`apps/web/server.mjs`、版本元数据、`apps/mobile/*`、CI 版本读取（上轮已改）、AGENTS.md；Web 容器需重新部署。
+- 完成内容：
+  - 服务端 `apps/web/server.mjs`：登录/注册响应体新增 `token`；`getSessionUser` 同时接受 `Authorization: Bearer` / `X-GW-Token`（Cookie 兼容保留，Web 端不受影响）。
+  - 移动端设置页：移除管理端账号，新增“工作台地址”+ 注册/登录/退出；令牌持久化，密码不落盘。
+  - 图库：`同步我的图库` 改拉工作台 `/library?kind=image|video`（按账号隔离）；生成图片/视频成功后 `POST /ownership/claim` 自动归属到当前账号；展示/下载统一用 Grok2API 公网媒体 URL。
+  - 下载：弃用 `FileSystem.downloadAsync`（iOS 报 -3000），改为 `fetch` + `blob` + Base64 `writeAsStringAsync` 落盘后 `MediaLibrary.saveToLibraryAsync` 存相册，权限拒绝回退分享。
+  - 版本：全仓统一 `1.0.11`（根/Web/移动端/core/锁文件/`APP_VERSION`/`app.json`/versionCode 10011）。
+- 验证：
+  - 本地：`npm run build:web` 通过（1577 模块）；`npx expo export --platform android` 通过（590 模块）；本地临时起 server.mjs 端到端验证注册返回 token、带 token 读 `/library` 200、无 token 401、退出正常。
+  - 部署：候选镜像 `sha256:c85a5f67ad9c9258d3b5fef790c4d4782fd9e77b9f6c3de411ae02f13f825908` 临时端口 38697 验证首页 200、`/auth/me` 200、未登录 `/library` 401、产物含 1.0.11；正式上线后线上 `/auth/me` 200、容器挂载 `web_grok-workbench-data:/app/data` 与只读 `grok2api_grok2api-data:/grok2api-data` 保留；线上用临时账号 `codetest_live` 验证登录→me→library→退出全部正常后已从 auth.json 清理（恢复测试前备份）。
+  - 构建：Android run 33294237062 成功 `dist-android/GrokWorkbench-v1.0.11-9.apk`（约 65 MB）；iOS run 33294239898 成功 `dist-ios/GrokWorkbench-v1.0.11-6-unsigned.ipa`（约 5.8 MB）；结构校验通过；旧包 v1.0.10-8 / v1.0.10-5 已移入 `旧版本/`。
+  - 清理：删除被取代的 v1.0.10 三条构建记录，GitHub 仅保留最新 Web（33294237212）/ Android v1.0.11-9 / iOS v1.0.11-6。
+- 部署状态：Web 线上已更新为 1.0.11（镜像 `c85a5f67ad9c`）；回滚标签 `web-grok-workbench-web:1.0.9-before-accounts`（镜像 `87e62551a45c`）；源码备份 `/opt/grok-workbench/backups/1.0.9-before-accounts-20260830/`（含旧 server.mjs 与测试前 auth.json）。
+- 遗留：真实设备验证重点：① 设置页用与 Web 端相同的账号登录后，“同步我的图库”能拉到自己的历史；② 换账号登录不会看到别人的图库；③ iOS 下载能直接存相册（首次弹权限）；④ 手机在外网时需把工作台（38696）也暴露到公网，或在设置里填工作台公网地址。
