@@ -429,3 +429,10 @@ docker logs --tail 20 grok-workbench-web
 - 验证：`npm run build:web` 通过（1577 模块）；`npx expo export --platform android` 通过（592 模块）；`npx expo export --platform ios` 通过（593 模块）。
 - 部署边界：本轮已完成本地三端代码与构建验证；Web 线上容器、Android APK Release、iOS IPA 尚未在本条任务中重新发布，需按现有候选镜像与 CI 流程发布 `1.0.16` 后再做真实设备联调。
 - 遗留风险：真实编辑请求依赖客户端 Key 对图片编辑模型的可用权限；建议发布后用一张小于 10 MB 的图片测试“去除背景/更换衣服/改变背景”等指令，并确认生成结果能进入三端图库。
+
+### 2026-09-01：发布图片编辑 1.0.16（进行中）
+
+- 状态：进行中。
+- 目标：发布 Web 1.0.16，并构建 Android APK 与 iOS 未签名 IPA。
+- 范围：服务器 `/opt/grok-workbench` 正确源码、Web 候选镜像与线上容器、GitHub Actions Android/iOS 构建产物。
+- 风险：Web 发布必须从 `/opt/grok-workbench/apps/web` 构建并保留数据卷；Android 必须通过固定证书校验；iOS 产物为未签名 IPA，只能侧载或后续签名。
