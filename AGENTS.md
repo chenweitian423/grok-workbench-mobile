@@ -436,3 +436,13 @@ docker logs --tail 20 grok-workbench-web
 - 目标：发布 Web 1.0.16，并构建 Android APK 与 iOS 未签名 IPA。
 - 范围：服务器 `/opt/grok-workbench` 正确源码、Web 候选镜像与线上容器、GitHub Actions Android/iOS 构建产物。
 - 风险：Web 发布必须从 `/opt/grok-workbench/apps/web` 构建并保留数据卷；Android 必须通过固定证书校验；iOS 产物为未签名 IPA，只能侧载或后续签名。
+
+### 2026-09-01：发布图片编辑 1.0.16（已完成）
+
+- 状态：已完成。
+- Web：从服务器正确目录 `/opt/grok-workbench/apps/web` 构建候选镜像并验证成功，镜像 ID `sha256:fbffdf9359ebc3acad05318cfa6cffa8d1fed9fb50eb2f4a264f28072c7076d0`；已正式上线，首页与 `/auth/me` 返回 200，数据卷保持不变。
+- 回滚点：`web-grok-workbench-web:1.0.15-before-image-edit`；源码备份 `/opt/grok-workbench/backups/1.0.15-before-image-edit-20260901/`。
+- Android：GitHub Actions run `33465027506` 成功，Release `v1.0.16` 已创建/更新，APK `GrokWorkbench-v1.0.16.apk`，SHA256 `e2a1c20568ed4b1efbc3b0d01afc1ec7cf980c405ac3e6c1258d98914b7fa9ed`，固定证书校验通过。
+- iOS：GitHub Actions run `33465048516` 成功，未签名 IPA `GrokWorkbench-v1.0.16-11-unsigned.ipa` 已下载到本地 `dist-ios/`；需侧载或后续签名后安装。
+- Web CI：run `33465027502` 成功；本地与服务器构建均通过。
+- 遗留：尚未使用真实客户端 Key 在实体 Android/iOS 设备上完成图片编辑联调；建议发布后上传小于 10 MB 的图片测试编辑结果和图库归属。
