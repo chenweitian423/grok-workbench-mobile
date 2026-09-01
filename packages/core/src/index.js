@@ -1,4 +1,4 @@
-export const APP_VERSION = "1.0.15";
+export const APP_VERSION = "1.0.16";
 export const DEFAULT_BASE_URL = "/api";
 export const DEFAULT_SERVER_BASE_URL = "http://192.168.123.195:38695";
 
@@ -231,6 +231,28 @@ export class GrokApi {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
+    });
+  }
+
+  editImage({ prompt, model = "grok-imagine-image-edit", images = [], count = 1, aspectRatio = "", resolution = "1k", size = "", response_format = "url" } = {}) {
+    const inputs = (Array.isArray(images) ? images : [images]).map((image) => {
+      if (typeof image === "string") return { url: image };
+      return { url: image?.url || image?.dataUrl || image?.image_url || "" };
+    }).filter((image) => image.url);
+    return this.request("/v1/images/edits", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        prompt,
+        images: inputs,
+        n: Number(count),
+        aspect_ratio: aspectRatio,
+        resolution,
+        size,
+        response_format,
+        stream: false
+      })
     });
   }
 

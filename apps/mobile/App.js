@@ -55,6 +55,7 @@ const KNOWN_CHAT_MODELS = [
 const KNOWN_IMAGE_MODELS = [
   "grok-imagine-image-2.0",
   "grok-imagine-image",
+  "grok-imagine-image-edit",
   "grok-imagine-image-lite",
   "grok-imagine-image-quality"
 ];
@@ -587,7 +588,10 @@ export default function App() {
     setBusy(true);
     try {
       let prompt = originalPrompt;
-      if (imageDataUrl) {
+      if (isImageEditModel(imageModel) && !imageDataUrl) {
+        throw new Error("图片编辑模型需要先上传参考图");
+      }
+      if (imageDataUrl && !isImageEditModel(imageModel)) {
         setStatus("正在分析参考图并提取视觉约束");
         const referenceDescription = await api.describeReferenceImage({
           prompt: originalPrompt,
@@ -598,12 +602,14 @@ export default function App() {
         prompt = `${originalPrompt}\n\n参考图视觉约束（在不冲突时保持）：\n${referenceDescription}`;
         setStatus("参考图分析完成，正在生成图片");
       }
-      const data = await api.generateImage({ prompt, model: imageModel, ...imageParams });
+      const data = isImageEditModel(imageModel)
+        ? await api.editImage({ prompt, model: imageModel, images: [{ url: imageDataUrl }], count: imageParams.count, aspectRatio: imageParams.aspectRatio, resolution: imageParams.resolution })
+        : await api.generateImage({ prompt, model: imageModel, ...imageParams });
       const items = extractMobileMediaItems(data, baseUrl, "image");
       setMedia(items);
       addToGallery(items, { prompt, model: imageModel });
       claimToServer(items, { kind: "image", prompt, model: imageModel });
-      setStatus(extractJobId(data) ? `任务已提交：${extractJobId(data)}` : "图片生成完成");
+      setStatus(extractJobId(data) ? `任务已提交：${extractJobId(data)}` : `${isImageEditModel(imageModel) ? "图片编辑" : "图片生成"}完成`);
     } catch (error) {
       setStatus(error.message);
     } finally {
@@ -1172,6 +1178,7 @@ function MediaWorkspace({ mode, model, setModel, modelOptions, input, setInput, 
         <Pressable style={styles.primary} onPress={create} disabled={busy}><Text style={styles.primaryText}>{isVideo ? "生成视频" : "生成图片"}</Text></Pressable>
       </View>
       {imageDataUrl ? <Image source={{ uri: imageDataUrl }} style={styles.preview} /> : null}
+      {!isVideo && isImageEditModel(model) ? <Text style={styles.hint}>图片编辑模式：请上传参考图，提示词描述你想修改的内容。</Text> : null}
       {isVideo && videoRequestPreview ? (
         <View style={styles.requestPreview}>
           <Text style={styles.sectionTitle}>实际发送的提示词</Text>
@@ -1783,7 +1790,7 @@ function extractWorkbenchLibraryItems(data, grokBaseUrl, kind) {
 function buildModelLists(models) {
   const ids = models.length ? models.map(normalizeModelOption) : Object.values(DEFAULT_MODELS);
   const chat = unique([...KNOWN_CHAT_MODELS, ...ids.filter((id) => /chat|grok-4|composer|build/i.test(id))]);
-  const image = unique([...KNOWN_IMAGE_MODELS, ...ids.filter((id) => /image/i.test(id) && !/edit/i.test(id))]);
+  const image = unique([...KNOWN_IMAGE_MODELS, ...ids.filter((id) => /image/i.test(id))]);
   const video = unique(ids.filter((id) => /video/i.test(id)));
   const voice = unique([...KNOWN_VOICE_MODELS, ...ids.filter((id) => /voice/i.test(id) && !/edit/i.test(id))]);
   return {
@@ -1810,7 +1817,11 @@ function pickChatModel(mapped) {
 }
 
 function pickImageModel(mapped) {
-  return mapped.find((id) => /^grok-imagine-image$/i.test(id)) || mapped.find((id) => /image/i.test(id) && !/edit/i.test(id));
+  return mapped.find((id) => /^grok-imagine-image$/i.test(id)) || mapped.find((id) => /image/i.test(id));
+}
+
+function isImageEditModel(value) {
+  return /image[-_]?edit/i.test(String(value || ""));
 }
 
 function pickVideoModel(mapped) {

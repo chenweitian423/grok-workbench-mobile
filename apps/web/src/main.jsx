@@ -103,6 +103,7 @@ const MUSIC_LENGTH_PROFILES = {
 const KNOWN_IMAGE_MODELS = [
   "grok-imagine-image-2.0",
   "grok-imagine-image",
+  "grok-imagine-image-edit",
   "grok-imagine-image-lite",
   "grok-imagine-image-quality"
 ];
@@ -206,7 +207,7 @@ function App() {
   const modelLists = useMemo(() => {
     const ids = models.length ? models.map(normalizeModelOption) : Object.values(DEFAULT_MODELS);
     const chat = unique([...KNOWN_CHAT_MODELS, ...ids.filter((id) => /chat|grok-4|composer|build/i.test(id))]);
-    const image = unique([...KNOWN_IMAGE_MODELS, ...ids.filter((id) => /image/i.test(id) && !/edit/i.test(id))]);
+    const image = unique([...KNOWN_IMAGE_MODELS, ...ids.filter((id) => /image/i.test(id))]);
     const video = unique(ids.filter((id) => /video/i.test(id)));
     const voice = unique([...KNOWN_VOICE_MODELS, ...ids.filter((id) => /voice/i.test(id) && !/edit/i.test(id))]);
     return {
@@ -344,7 +345,7 @@ function App() {
       localStorage.setItem(MODEL_LIST_KEY, JSON.stringify(list));
       const mapped = list.map(normalizeModelOption);
       const chatModel = mapped.find((id) => /grok-composer-2\.5-fast/i.test(id)) || mapped.find((id) => /grok-4\.5/i.test(id)) || mapped.find((id) => /chat/i.test(id));
-      const imageModel = mapped.find((id) => /^grok-imagine-image$/i.test(id)) || mapped.find((id) => /image/i.test(id) && !/edit/i.test(id));
+    const imageModel = mapped.find((id) => /^grok-imagine-image$/i.test(id)) || mapped.find((id) => /image/i.test(id));
       const videoModel = mapped.find((id) => /^grok-imagine-video$/i.test(id)) || mapped.find((id) => /video/i.test(id));
       const voiceModel = mapped.find((id) => /^grok-voice-latest$/i.test(id)) || mapped.find((id) => /voice/i.test(id));
       setModel((current) => ({
@@ -540,26 +541,35 @@ function App() {
       let selectedModel = model.image;
       let prompt = originalPrompt;
       let data = null;
+      if (isImageEditModel(selectedModel) && !imageDataUrl) {
+        throw new Error("图片编辑模型需要先上传参考图。");
+      }
       if (imageDataUrl) {
-        setStatus("正在分析参考图并提取视觉约束");
-        const referenceDescription = await api.describeReferenceImage({
-          prompt: originalPrompt,
-          imageDataUrl,
-          model: selectVisionModel(modelLists.chat)
-        });
-        if (!referenceDescription.trim()) throw new Error("参考图分析没有返回有效结果");
-        prompt = prepareMediaPrompt([
-          originalPrompt,
-          "参考图视觉约束（在不冲突时保持）：",
-          referenceDescription
-        ].join("\n\n"), 3800);
-        setStatus("参考图分析完成，正在生成图片");
+        if (isImageEditModel(selectedModel)) {
+          setStatus("正在编辑参考图");
+        } else {
+          setStatus("正在分析参考图并提取视觉约束");
+          const referenceDescription = await api.describeReferenceImage({
+            prompt: originalPrompt,
+            imageDataUrl,
+            model: selectVisionModel(modelLists.chat)
+          });
+          if (!referenceDescription.trim()) throw new Error("参考图分析没有返回有效结果");
+          prompt = prepareMediaPrompt([
+            originalPrompt,
+            "参考图视觉约束（在不冲突时保持）：",
+            referenceDescription
+          ].join("\n\n"), 3800);
+          setStatus("参考图分析完成，正在生成图片");
+        }
       }
       try {
-        data = await api.generateImage({ prompt, model: selectedModel, ...imageParams });
+        data = isImageEditModel(selectedModel)
+          ? await api.editImage({ prompt, model: selectedModel, images: [{ url: imageDataUrl }], count: imageParams.count, aspectRatio: imageParams.aspectRatio, resolution: imageParams.resolution })
+          : await api.generateImage({ prompt, model: selectedModel, ...imageParams });
       } catch (error) {
         const message = String(error?.message || "");
-        if (message.includes("502") && selectedModel !== DEFAULT_MODELS.imageQuality) {
+        if (!isImageEditModel(selectedModel) && message.includes("502") && selectedModel !== DEFAULT_MODELS.imageQuality) {
           selectedModel = DEFAULT_MODELS.imageQuality;
           setStatus("普通图片线路暂不可用，正在切换高清线路重试");
           data = await api.generateImage({ prompt, model: selectedModel, ...imageParams });
@@ -572,7 +582,7 @@ function App() {
       setMedia(items);
       appendHistory("image", items, { prompt, model: selectedModel });
       await refreshServerLibrary("image");
-      setStatus("图片生成完成");
+      setStatus(`${isImageEditModel(selectedModel) ? "图片编辑" : "图片生成"}完成`);
     } catch (error) {
       setStatus(formatError(error));
     } finally {
@@ -1504,6 +1514,7 @@ function CreatePanel(props) {
           </button>
         </div>
       </div>
+      {!isVideo && isImageEditModel(model.image) && <div className="draftHint">图片编辑模式：请上传参考图片，提示词描述你想修改的内容。</div>}
 
       {imageDataUrl && <img className="reference" src={imageDataUrl} alt="参考图" />}
 
@@ -1824,6 +1835,10 @@ function normalizeModelOption(id) {
   if (value.startsWith("Console/")) return value.slice("Console/".length);
   if (value.startsWith("Build/")) return value.slice("Build/".length);
   return value;
+}
+
+function isImageEditModel(value) {
+  return /image[-_]?edit/i.test(String(value || ""));
 }
 
 function loadSavedModels() {

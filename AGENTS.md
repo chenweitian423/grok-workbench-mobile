@@ -372,6 +372,22 @@ docker logs --tail 20 grok-workbench-web
 - CI 与产物：Web run 33312632319 成功；Android run 33312632305 成功，APK `dist-android/GrokWorkbench-v1.0.14-12.apk`（约 65 MB，含 classes.dex/lib，结构校验通过）；iOS run 33312789872（手动触发）构建完成后下载 IPA；旧 v1.0.13-11 APK 已移入 `dist-android/旧版本/`。
 - 遗留：① sky 账号需要打开一次 Web 图库或移动端“同步我的图库”触发历史找回（自动归属最近 6 小时内的 3 条未归属资产）；② 更早的未归属资产（本次扫描 disk 上图片未归属 77 条、视频 1 条，跨度到 8-21）不会自动归属，如需按账号回填需确认归属策略后写脚本；③ 视频画面与提示词无关属上游模型问题，建议换个 egress 账号/节点或换提示词再测。
 
+### 2026-09-01：解释 grok-imagine-image-edit 未出现在移动端模型列表
+
+- 状态：已完成。
+- 结论：截图中的 `grok-imagine-image-edit` 是 Grok Imagine 的图片编辑模型，后台能力标记为 Image Edit，不是普通纯文生图模型。
+- 根因：移动端和 Web 的 `buildModelLists` 都使用 `/image/i && !/edit/i` 过滤条件，主动排除了所有带 `edit` 的模型；这不是 `/v1/models` 鉴权失败或 Key 无权限导致的遗漏。
+- 兼容性说明：当前 `packages/core` 只实现 `POST /v1/images/generations`，图片页也只调用 `generateImage`；图片编辑模型通常需要单独的编辑请求体和参考图字段，不能只把模型名加入下拉框后继续走普通生成接口。
+- 本次处理：仅完成代码审计和原因记录，没有修改模型过滤、版本号或线上行为；如需支持该模型，下一步应先确认 Grok2API 的 `/v1/images/edits` 请求格式，再同时改 core、Web 和移动端的编辑工作流。
+
+### 2026-09-01：接入 Grok 图片编辑模型（进行中）
+
+- 状态：进行中。
+- 目标：让 Web、Android、iOS 的图片页支持 `grok-imagine-image-edit`，使用参考图和编辑提示词调用 Grok2API `/v1/images/edits`。
+- 预期版本：全仓统一 `1.0.16`；属于新增用户可见功能，必须升版。
+- 范围：`packages/core/src/index.js`、`apps/web/src/main.jsx`、`apps/mobile/App.js`、版本元数据、AGENTS.md；Web 需重新构建并部署，Android/iOS 需重新产出安装包。
+- 风险：编辑接口要求 `images[].url`，当前客户端参考图是 data URL；需验证 Grok2API 是否接受该格式以及真实设备上的编辑请求。编辑模型不应继续走普通 `/v1/images/generations` 线路。
+
 ### 2026-09-01：移动端在线更新方案评估
 
 - 状态：已完成。
