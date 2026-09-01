@@ -465,3 +465,10 @@ docker logs --tail 20 grok-workbench-web
 - Android：run `33466218580` 成功，Release `v1.0.17`，APK `GrokWorkbench-v1.0.17.apk`，SHA256 `c7a0d0c1eef1f900a01929b2ace999853a32cabd58d76c68720ccb4c03d4860a`。
 - iOS：run `33466283011` 成功，未签名 IPA `GrokWorkbench-v1.0.17-12-unsigned.ipa`，SHA256 `8fcccb34e8799469b7d6fc68dea4823403107faf31e1ab4d3071cbdf2b8afa4a`。
 - 遗留：该修复能消除请求约束不足和前端重复展示，但无法保证上游模型每次都严格局部编辑；仍需用同一参考图实测。如果结果继续完全无关，应进一步检查 Grok2API 当前 Web 编辑账户/路由是否真的把上传图片传给上游，而不是继续调整提示词。
+
+### 2026-09-01：纠正 Web 1.0.17 正式容器未切换
+
+- 状态：已完成。
+- 现象：1.0.17 候选镜像已构建，但正式 `grok-workbench-web` 容器仍运行 1.0.16 镜像 `sha256:fbffdf9359eb...`，因此用户页面仍显示 1.0.16；不是浏览器缓存。
+- 处理：重新执行正式容器强制重建，当前容器已切换到 `sha256:4f451f8a112a54dbff9e52d800e9ace581f5c2a076893fb570b2b408d2eea2a0`。
+- 验证：线上静态 JS 从 `index-BbPyUcGs.js` 更新为 `index-B9gK5Xcl.js`；线上 JS 包含 1.0.17、不包含 1.0.16；首页和 `/auth/me` 均返回 200。
