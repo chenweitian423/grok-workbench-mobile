@@ -591,6 +591,7 @@ export default function App() {
       if (isImageEditModel(imageModel) && !imageDataUrl) {
         throw new Error("图片编辑模型需要先上传参考图");
       }
+      if (isImageEditModel(imageModel)) prompt = buildImageEditPrompt(originalPrompt);
       if (imageDataUrl && !isImageEditModel(imageModel)) {
         setStatus("正在分析参考图并提取视觉约束");
         const referenceDescription = await api.describeReferenceImage({
@@ -1822,6 +1823,15 @@ function pickImageModel(mapped) {
 
 function isImageEditModel(value) {
   return /image[-_]?edit/i.test(String(value || ""));
+}
+
+function buildImageEditPrompt(value) {
+  return [
+    "只编辑参考图中用户明确指出的对象或区域。",
+    "保持原图中的人物身份、脸部、姿势、服装轮廓、场景、背景、光线、镜头角度、构图和画幅完全不变。",
+    "不要重新生成场景，不要替换人物，不要添加或删除其他对象。",
+    `具体修改要求：${String(value || "").trim()}`
+  ].join("\n");
 }
 
 function pickVideoModel(mapped) {

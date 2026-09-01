@@ -546,6 +546,7 @@ function App() {
       }
       if (imageDataUrl) {
         if (isImageEditModel(selectedModel)) {
+          prompt = buildImageEditPrompt(originalPrompt);
           setStatus("正在编辑参考图");
         } else {
           setStatus("正在分析参考图并提取视觉约束");
@@ -1839,6 +1840,15 @@ function normalizeModelOption(id) {
 
 function isImageEditModel(value) {
   return /image[-_]?edit/i.test(String(value || ""));
+}
+
+function buildImageEditPrompt(value) {
+  return [
+    "只编辑参考图中用户明确指出的对象或区域。",
+    "保持原图中的人物身份、脸部、姿势、服装轮廓、场景、背景、光线、镜头角度、构图和画幅完全不变。",
+    "不要重新生成场景，不要替换人物，不要添加或删除其他对象。",
+    `具体修改要求：${String(value || "").trim()}`
+  ].join("\n");
 }
 
 function loadSavedModels() {

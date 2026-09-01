@@ -1,4 +1,4 @@
-export const APP_VERSION = "1.0.16";
+export const APP_VERSION = "1.0.17";
 export const DEFAULT_BASE_URL = "/api";
 export const DEFAULT_SERVER_BASE_URL = "http://192.168.123.195:38695";
 
@@ -378,7 +378,7 @@ export function extractMediaItems(data) {
     content_type: data.content_type || data.contentType
   });
   collectNestedMedia(data, normalizedItems);
-  return normalizedItems.map((item) => {
+  const items = normalizedItems.map((item) => {
     const rawId = item.id || item.asset_id || item.assetId || item.result_asset_id || item.resultAssetId;
     const rawUrl = item.url || item.asset_url || item.video_url || item.image_url || item.download_url || item.media_url || item.mediaUrl || item.thumbnail_url || item.thumbnailUrl;
     const assetId = (/^(img|vid)_[A-Za-z0-9._-]+$/.test(String(rawId || "")) && String(rawId)) || (String(rawUrl || "").match(/(?:^|[/?])((?:img|vid)_[A-Za-z0-9._-]+)/) || [])[1] || "";
@@ -390,6 +390,13 @@ export function extractMediaItems(data) {
       mime: item.mime_type || item.content_type || item.mimeType || ""
     };
   }).filter((item) => item.url || item.b64);
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = item.id || item.url || item.b64?.slice(0, 80);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function collectNestedMedia(value, output, seen = new Set()) {
