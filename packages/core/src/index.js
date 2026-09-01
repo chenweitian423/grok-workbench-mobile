@@ -239,13 +239,15 @@ export class GrokApi {
       if (typeof image === "string") return { url: image };
       return { url: image?.url || image?.dataUrl || image?.image_url || "" };
     }).filter((image) => image.url);
+    const image = inputs[0];
+    if (!image) throw new Error("图片编辑至少需要一张输入图片");
     return this.request("/v1/images/edits", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model,
         prompt,
-        images: inputs,
+        image,
         n: Number(count),
         aspect_ratio: aspectRatio,
         resolution,

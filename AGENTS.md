@@ -418,3 +418,14 @@ docker logs --tail 20 grok-workbench-web
 - Web 部署：全仓版本统一为 `1.0.15`；服务器正确源码 `/opt/grok-workbench` 已同步并校验。候选镜像 `sha256:525bca02661f49d0baf85164e7100a96d9c9e3480d75083aa09a386a9e44daec` 在 38697 验证首页 200、`/auth/me` 200、匿名 `/library` 401、版本及音乐/语音/参考图/视频请求预览/聊天图片功能标记齐全后正式上线；数据卷保持 `web_grok-workbench-data:/app/data` 与只读 `grok2api_grok2api-data:/grok2api-data`。
 - 回滚点：镜像标签 `web-grok-workbench-web:1.0.14-before-android-online-update`，镜像 `sha256:dcbe2acb1aacc2242692deafe1600600b8c0bcec9c04be273478d823d4383fc4`；源码备份 `/opt/grok-workbench/backups/1.0.14-before-android-online-update-20260901/source-files.tar`。
 - 使用边界：`1.0.14` 本身没有更新代码，因此用户需要手动覆盖安装一次 `1.0.15`；从后续 `1.0.16` 开始可在 App 内检查、下载并调起安装。普通 Android 应用不能静默完成安装，系统确认步骤仍由用户操作；真实设备上的完整下载和系统安装流程仍需安装 `1.0.15` 后实测。
+
+### 2026-09-01：三端接入 Grok 图片编辑（已完成）
+
+- 状态：已完成。
+- 目标：让 Web、Android、iOS 图片页支持 `grok-imagine-image-edit`，上传参考图后用自然语言描述修改内容。
+- 版本：全仓统一 `1.0.16`，移动端 `versionCode 10016`。
+- 完成内容：模型列表纳入图片编辑模型；编辑模型必须上传参考图；普通参考图仍走视觉分析+生图，编辑模型改走 `POST /v1/images/edits`；Web 与移动端均显示编辑状态和提示。
+- 协议校验：对照 Grok2API 当前 Swagger/源码，编辑请求使用 `image: { url }` 单图字段（支持 data URL），不是 `images: []`；核心客户端已按真实协议发送 `model/prompt/image/n/aspect_ratio/resolution/response_format/stream`。
+- 验证：`npm run build:web` 通过（1577 模块）；`npx expo export --platform android` 通过（592 模块）；`npx expo export --platform ios` 通过（593 模块）。
+- 部署边界：本轮已完成本地三端代码与构建验证；Web 线上容器、Android APK Release、iOS IPA 尚未在本条任务中重新发布，需按现有候选镜像与 CI 流程发布 `1.0.16` 后再做真实设备联调。
+- 遗留风险：真实编辑请求依赖客户端 Key 对图片编辑模型的可用权限；建议发布后用一张小于 10 MB 的图片测试“去除背景/更换衣服/改变背景”等指令，并确认生成结果能进入三端图库。
