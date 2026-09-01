@@ -1,4 +1,4 @@
-export const APP_VERSION = "1.0.14";
+export const APP_VERSION = "1.0.15";
 export const DEFAULT_BASE_URL = "/api";
 export const DEFAULT_SERVER_BASE_URL = "http://192.168.123.195:38695";
 

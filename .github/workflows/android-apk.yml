@@ -1,5 +1,8 @@
 name: Build Android APK
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
   push:
@@ -34,8 +37,30 @@ jobs:
       - name: Rename APK
         run: |
           mkdir -p artifacts
-          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "artifacts/GrokWorkbench-v${{ steps.version.outputs.value }}-${{ github.run_number }}.apk"
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "artifacts/GrokWorkbench-v${{ steps.version.outputs.value }}.apk"
+      - name: Verify APK signature
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          "$APKSIGNER" verify --verbose --print-certs "artifacts/GrokWorkbench-v${{ steps.version.outputs.value }}.apk"
+          CERT_SHA256=$("$APKSIGNER" verify --print-certs "artifacts/GrokWorkbench-v${{ steps.version.outputs.value }}.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          test "$CERT_SHA256" = "fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c"
       - uses: actions/upload-artifact@v4
         with:
           name: GrokWorkbench-Android-v${{ steps.version.outputs.value }}-${{ github.run_number }}
           path: artifacts/*.apk
+      - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          TAG="v${VERSION}"
+          APK="artifacts/GrokWorkbench-v${VERSION}.apk"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" \
+              --title "Grok Workbench v${VERSION}" \
+              --generate-notes \
+              --latest
+          fi

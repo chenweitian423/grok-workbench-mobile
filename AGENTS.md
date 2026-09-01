@@ -371,3 +371,22 @@ docker logs --tail 20 grok-workbench-web
 - 部署：线上已更新为 1.0.14，镜像 `sha256:dcbe2acb1aacc2242692deafe1600600b8c0bcec9c04be273478d823d4383fc4`（标签 `web-grok-workbench-web:latest`、`web-grok-workbench-web:1.0.14-candidate`）；回滚标签 `web-grok-workbench-web:1.0.13-before-mobile-claim-fix`（镜像 `d857c8212535`）；源码备份 `/opt/grok-workbench/backups/1.0.13-before-mobile-claim-fix-20260830/`。线上首页 200、`/auth/me` 200、匿名 `/library` 401、数据卷继续挂载 `grok2api_grok2api-data:/grok2api-data:ro` 与 `web_grok-workbench-data:/app/data`，日志正常。
 - CI 与产物：Web run 33312632319 成功；Android run 33312632305 成功，APK `dist-android/GrokWorkbench-v1.0.14-12.apk`（约 65 MB，含 classes.dex/lib，结构校验通过）；iOS run 33312789872（手动触发）构建完成后下载 IPA；旧 v1.0.13-11 APK 已移入 `dist-android/旧版本/`。
 - 遗留：① sky 账号需要打开一次 Web 图库或移动端“同步我的图库”触发历史找回（自动归属最近 6 小时内的 3 条未归属资产）；② 更早的未归属资产（本次扫描 disk 上图片未归属 77 条、视频 1 条，跨度到 8-21）不会自动归属，如需按账号回填需确认归属策略后写脚本；③ 视频画面与提示词无关属上游模型问题，建议换个 egress 账号/节点或换提示词再测。
+
+### 2026-09-01：移动端在线更新方案评估
+
+- 状态：已完成。
+- 目标：评估 Android/iOS 从当前“每次手动下载安装包”改为应用内在线更新的可行方案。
+- 版本：保持 `1.0.14`；本次仅方案评估与记录，不修改程序、构建产物或线上部署。
+- 当前状态：移动端尚未安装或配置 `expo-updates`/EAS Update；Android CI 仅构建并上传 GitHub Actions APK artifact；iOS CI 仅生成未签名 IPA，不具备系统认可的自动覆盖安装链路。
+- 推荐方案：采用双层更新。JavaScript、样式和普通图片资源使用 EAS Update 热更新，应用启动时后台检查并在下载完成后提示重启；新增/升级原生依赖、权限、Expo SDK 或原生配置时，Android 通过固定签名的 APK 发布清单下载并唤起系统安装，iOS 改用 TestFlight/App Store（或合规的 Ad Hoc/企业分发）更新。
+- 关键风险：Android 后续 APK 必须与用户已安装版本使用同一签名证书，否则无法覆盖安装；当前流水线需要先确认现有 APK 的签名稳定性，再引入持久化 keystore。iOS 未签名 IPA 不能由应用自行静默安装或可靠覆盖更新。
+- 下一步：用户确认采用 EAS 托管热更新还是自建 Expo Updates 服务后，再实施 `expo-updates`、更新频道/运行时版本、应用内更新提示、Android release 清单与固定签名流水线。
+
+### 2026-09-01：Android 应用内在线更新（进行中）
+
+- 状态：进行中。
+- 目标：让 Android 客户端能够在应用内检查 GitHub Releases 最新版本、查看更新说明、下载并校验 APK，然后调起 Android 系统安装界面；iOS 本轮不接入安装包在线更新。
+- 预期版本：全仓统一 `1.0.15`；属于用户可见功能与发布流程变化，必须增加 patch 版本。
+- 范围：`apps/mobile/App.js`、`apps/mobile/package.json`、`apps/mobile/app.json`、根版本与锁文件、Android GitHub Actions/Release 流程、AGENTS.md；Web 仅同步版本并按标准候选镜像流程部署，不改变业务功能。
+- 发布源：公开仓库 `chenweitian423/grok-workbench-mobile` 的 GitHub Releases；应用通过 Releases API 检查版本，APK 从 Release Assets 下载，不依赖会过期的 Actions artifact。
+- 风险：必须确认当前已安装 APK 与新构建 APK 使用同一签名证书；如果现有流水线使用不可复现的临时签名，用户需要最后手动安装一次使用固定签名的在线更新基础版。Android 不允许普通应用静默安装，下载完成后仍需用户在系统安装界面确认。

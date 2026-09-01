@@ -1,20 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio } from "expo-av";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
+import * as IntentLauncher from "expo-intent-launcher";
 import * as MediaLibrary from "expo-media-library";
 import * as Sharing from "expo-sharing";
 import { StatusBar } from "expo-status-bar";
-import { DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, PROMPT_WORKFLOWS, buildVideoGenerationBody, extractJobId } from "@grok-workbench/core";
+import { APP_VERSION, DEFAULT_MODELS, DEFAULT_SERVER_BASE_URL, GrokApi, PROMPT_TOOLS, PROMPT_WORKFLOWS, buildVideoGenerationBody, extractJobId } from "@grok-workbench/core";
 
 const SETTINGS_KEY = "grok-workbench-mobile-settings";
 const GALLERY_KEY = "grok-workbench-mobile-gallery";
-const MOBILE_APP_VERSION = "1.0.13";
 const DEFAULT_WORKBENCH_BASE_URL = "http://192.168.123.195:38696";
+const UPDATE_REPOSITORY = "chenweitian423/grok-workbench-mobile";
+const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPOSITORY}/releases/latest`;
+const UPDATE_DISMISSED_KEY = "grok-workbench-mobile-dismissed-update";
 
 const TABS = [
   { id: "prompt", label: "提示词" },
@@ -143,6 +146,10 @@ export default function App() {
   const [gallery, setGallery] = useState([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [previewItem, setPreviewItem] = useState(null);
+  const [appUpdate, setAppUpdate] = useState(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateStatus, setUpdateStatus] = useState(Platform.OS === "android" ? "尚未检查更新" : "仅 Android 支持安装包在线更新");
 
   const api = useMemo(() => new GrokApi({ baseUrl, apiKey }), [baseUrl, apiKey]);
   const workflow = PROMPT_WORKFLOWS.find((item) => item.id === workflowId) || PROMPT_WORKFLOWS[1];
@@ -190,6 +197,12 @@ export default function App() {
   }, [gallery]);
 
   useEffect(() => {
+    if (Platform.OS !== "android") return undefined;
+    const timer = setTimeout(() => checkAndroidUpdate({ silent: true }), 1800);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
     if (mode !== "voice" || !apiKey.trim() || voiceMode !== "tts") return undefined;
     let cancelled = false;
     api.voices({ model: voiceModel }).then((data) => {
@@ -215,6 +228,106 @@ export default function App() {
       setStatus("设置已保存");
     } catch (error) {
       setStatus(`保存失败：${error.message}`);
+    }
+  }
+
+  async function checkAndroidUpdate({ silent = false } = {}) {
+    if (Platform.OS !== "android") {
+      setUpdateStatus("仅 Android 支持安装包在线更新");
+      return;
+    }
+    setUpdateBusy(true);
+    if (!silent) setUpdateStatus("正在检查 GitHub Releases");
+    try {
+      const response = await fetch(UPDATE_API_URL, {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28"
+        }
+      });
+      if (response.status === 404) {
+        setAppUpdate(null);
+        setUpdateStatus("还没有发布可用的 Android 安装包");
+        return;
+      }
+      if (!response.ok) throw new Error(`GitHub 返回 ${response.status}`);
+      const release = await response.json();
+      const version = normalizeVersion(release?.tag_name || release?.name);
+      const asset = (Array.isArray(release?.assets) ? release.assets : []).find((item) => /\.apk$/i.test(String(item?.name || "")));
+      if (!version || !asset?.browser_download_url) throw new Error("最新版没有找到 APK 文件");
+      if (compareVersions(version, APP_VERSION) <= 0) {
+        setAppUpdate(null);
+        setUpdateProgress(0);
+        setUpdateStatus(`当前 v${APP_VERSION} 已是最新版`);
+        return;
+      }
+      const next = {
+        version,
+        url: asset.browser_download_url,
+        size: Number(asset.size || 0),
+        notes: String(release?.body || "本次版本包含功能改进和问题修复。").trim()
+      };
+      setAppUpdate(next);
+      setUpdateStatus(`发现新版本 v${version}`);
+      const dismissed = await AsyncStorage.getItem(UPDATE_DISMISSED_KEY);
+      if (!silent || dismissed !== version) showUpdatePrompt(next);
+    } catch (error) {
+      setUpdateStatus(`检查更新失败：${error.message}`);
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  function showUpdatePrompt(update) {
+    Alert.alert(
+      `发现新版本 v${update.version}`,
+      update.notes.slice(0, 500),
+      [
+        {
+          text: "稍后",
+          style: "cancel",
+          onPress: () => AsyncStorage.setItem(UPDATE_DISMISSED_KEY, update.version).catch(() => {})
+        },
+        { text: "下载更新", onPress: () => downloadAndInstallUpdate(update) }
+      ]
+    );
+  }
+
+  async function downloadAndInstallUpdate(update = appUpdate) {
+    if (Platform.OS !== "android" || !update?.url) return;
+    setUpdateBusy(true);
+    setUpdateProgress(0);
+    setUpdateStatus(`正在下载 v${update.version}`);
+    try {
+      const directory = `${FileSystem.documentDirectory}updates/`;
+      await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
+      const fileUri = `${directory}GrokWorkbench-v${update.version}.apk`;
+      await FileSystem.deleteAsync(fileUri, { idempotent: true });
+      const download = FileSystem.createDownloadResumable(update.url, fileUri, {}, (progress) => {
+        const total = Number(progress.totalBytesExpectedToWrite || update.size || 0);
+        if (total > 0) setUpdateProgress(Math.min(1, progress.totalBytesWritten / total));
+      });
+      const result = await download.downloadAsync();
+      if (!result?.uri) throw new Error("APK 下载没有完成");
+      const info = await FileSystem.getInfoAsync(result.uri);
+      if (!info.exists || !info.size) throw new Error("下载的 APK 文件无效");
+      if (update.size > 0 && Number(info.size) !== update.size) {
+        await FileSystem.deleteAsync(result.uri, { idempotent: true });
+        throw new Error("APK 大小校验失败，请重新下载");
+      }
+      setUpdateProgress(1);
+      setUpdateStatus("下载完成，正在打开系统安装界面");
+      const contentUri = await FileSystem.getContentUriAsync(result.uri);
+      await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+        data: contentUri,
+        flags: 1,
+        type: "application/vnd.android.package-archive"
+      });
+    } catch (error) {
+      setUpdateStatus(`更新失败：${error.message}`);
+      Alert.alert("无法安装更新", `${error.message}\n\n请确认已允许 Grok Workbench 安装未知来源应用，然后重试。`);
+    } finally {
+      setUpdateBusy(false);
     }
   }
 
@@ -737,7 +850,7 @@ export default function App() {
         <Image source={require("./assets/icon.png")} style={styles.logo} />
         <View>
           <Text style={styles.title}>Grok Workbench</Text>
-          <Text style={styles.version}>v{MOBILE_APP_VERSION}</Text>
+          <Text style={styles.version}>v{APP_VERSION}</Text>
         </View>
       </View>
 
@@ -771,6 +884,13 @@ export default function App() {
           loadModels={loadModels}
           models={models}
           busy={busy}
+          appVersion={APP_VERSION}
+          appUpdate={appUpdate}
+          updateBusy={updateBusy}
+          updateProgress={updateProgress}
+          updateStatus={updateStatus}
+          checkAndroidUpdate={checkAndroidUpdate}
+          downloadAndInstallUpdate={downloadAndInstallUpdate}
         />
       ) : mode === "prompt" ? (
         <PromptWorkspace
@@ -919,7 +1039,7 @@ export default function App() {
   );
 }
 
-function SettingsWorkspace({ baseUrl, setBaseUrl, apiKey, setApiKey, wbBaseUrl, setWbBaseUrl, wbUser, wbUsername, setWbUsername, wbPassword, setWbPassword, onLogin, onRegister, onLogout, saveSettings, loadModels, models, busy }) {
+function SettingsWorkspace({ baseUrl, setBaseUrl, apiKey, setApiKey, wbBaseUrl, setWbBaseUrl, wbUser, wbUsername, setWbUsername, wbPassword, setWbPassword, onLogin, onRegister, onLogout, saveSettings, loadModels, models, busy, appVersion, appUpdate, updateBusy, updateProgress, updateStatus, checkAndroidUpdate, downloadAndInstallUpdate }) {
   return (
     <View style={styles.workspace}>
       <Text style={styles.sectionTitle}>账号（与 Web 端通用，图库按账号隔离）</Text>
@@ -952,6 +1072,22 @@ function SettingsWorkspace({ baseUrl, setBaseUrl, apiKey, setApiKey, wbBaseUrl, 
         <Pressable style={styles.button} onPress={loadModels} disabled={busy}><Text style={styles.buttonText}>{busy ? "读取中..." : "获取模型"}</Text></Pressable>
       </View>
       <Text style={styles.hint}>已获取 {models.length} 个模型。登录工作台账号后，生成的图片/视频会自动记到你的账号；换手机登录同一账号也能在图库看到自己的历史，别人看不到。</Text>
+      <Text style={styles.sectionTitle}>应用更新</Text>
+      <Text style={styles.label}>当前版本 v{appVersion}</Text>
+      <Text style={styles.hint}>{updateStatus}</Text>
+      {updateBusy && updateProgress > 0 ? (
+        <View style={styles.updateTrack}><View style={[styles.updateFill, { width: `${Math.round(updateProgress * 100)}%` }]} /></View>
+      ) : null}
+      <View style={styles.actions}>
+        <Pressable style={styles.button} onPress={() => checkAndroidUpdate()} disabled={updateBusy}>
+          <Text style={styles.buttonText}>{updateBusy && updateProgress === 0 ? "检查中..." : "检查更新"}</Text>
+        </Pressable>
+        {appUpdate ? (
+          <Pressable style={styles.primary} onPress={() => downloadAndInstallUpdate(appUpdate)} disabled={updateBusy}>
+            <Text style={styles.primaryText}>{updateBusy && updateProgress > 0 ? `下载 ${Math.round(updateProgress * 100)}%` : `安装 v${appUpdate.version}`}</Text>
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -1457,6 +1593,21 @@ function cleanBaseUrl(baseUrl) {
   return String(baseUrl || "").trim().replace(/\/+$/, "");
 }
 
+function normalizeVersion(value) {
+  const match = String(value || "").match(/v?(\d+\.\d+\.\d+)/i);
+  return match ? match[1] : "";
+}
+
+function compareVersions(left, right) {
+  const a = normalizeVersion(left).split(".").map(Number);
+  const b = normalizeVersion(right).split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (a[index] || 0) - (b[index] || 0);
+    if (difference) return difference;
+  }
+  return 0;
+}
+
 async function rawJsonRequest(url, options = {}) {
   const response = await fetch(url, options);
   const text = await response.text();
@@ -1740,6 +1891,8 @@ const styles = StyleSheet.create({
   toolHint: { color: "#69707a", marginTop: 4, lineHeight: 19 },
   textarea: { minHeight: 150, textAlignVertical: "top", backgroundColor: "#fff", borderWidth: 1, borderColor: "#dfe3e8", borderRadius: 8, padding: 14 },
   actions: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
+  updateTrack: { height: 6, overflow: "hidden", borderRadius: 3, backgroundColor: "#e7eaee" },
+  updateFill: { height: "100%", borderRadius: 3, backgroundColor: "#1f7a4d" },
   button: { height: 44, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1, borderColor: "#dfe3e8", backgroundColor: "#fff", justifyContent: "center" },
   buttonText: { color: "#22262d", fontWeight: "600" },
   primary: { height: 44, paddingHorizontal: 18, borderRadius: 8, backgroundColor: "#15171c", justifyContent: "center", alignItems: "center" },
