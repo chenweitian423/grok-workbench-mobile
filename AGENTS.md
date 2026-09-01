@@ -482,3 +482,19 @@ docker logs --tail 20 grok-workbench-web
 - 对照：11:20 与 11:23 的两个其他 Grok Web 账号曾返回 200，但结果是与参考图无关的森林图。结合后续相同请求的结构化 403，当前最可能是 Grok Web 对参考图或丝袜/腿部编辑请求触发内容策略，而不是 Workbench 请求格式或模型选择错误。
 - 建议验证：用同一参考图先测试完全中性的修改（如“仅将窗帘改为蓝色”），再用一张普通风景图测试局部改色；若中性编辑成功，可确认路由正常且原请求被上游内容策略限制。若中性编辑仍返回 403，再处理 Grok Web 账号选择/失败账号隔离。
 - 版本与部署：本次只诊断和记录，不修改程序，保持 1.0.17。
+
+### 2026-09-01：修复 Grok Web 图片编辑 Statsig 过期（进行中）
+
+- 状态：进行中。
+- 根因修正：中性提示词仍复现相同 503；根据 92 字节响应长度与 SHA256 `880348e8...` 精确还原，上游实际返回 `{"error":{"code":7,"message":"This page is out of date. Reload to continue.","details":[]}}\n`，确认不是内容审核，而是 Grok Web Statsig 页面签名刷新后仍过期。
+- 当前环境：运行镜像 `sha256:f255cd78...`，VERSION 为 v3.1.5；官方 `latest` 新镜像仍标记 v3.1.5，但摘要已更新为 `sha256:2450a75c...`，可能包含同版本签名协议修订。
+- 计划：保留旧镜像回滚标签后更新 Grok2API 容器，验证健康、模型列表、日志、数据库及媒体卷；Workbench 版本保持 1.0.17。
+
+### 2026-09-01：修复 Grok Web 图片编辑 Statsig 过期（已完成部署）
+
+- 状态：已完成后端更新，等待用户真实请求复测。
+- 精确错误：失败响应为 `{"error":{"code":7,"message":"This page is out of date. Reload to continue.","details":[]}}\n`，其 92 字节长度与 SHA256 `880348e8a98390bf3e612b4f6b33c63e9a771f2d37f389860ec5379b654c3993` 和线上日志完全一致；不是提示词、审核或参考图缺失。
+- 更新：Grok2API 官方 `latest` 镜像从 `sha256:f255cd78ce2d...` 更新到 `sha256:2450a75c162a...`；VERSION 仍为 v3.1.5，但镜像内容已更新。旧镜像保留为 `grok2api-local:v3.1.5-before-statsig-fix`。
+- 验证：新容器启动正常，`/healthz` 返回 200，匿名 `/v1/models` 返回预期 401；PostgreSQL、`grok2api_grok2api-data:/app/data` 与 `grok2api_quality_guard_state` 挂载保持不变，启动日志无迁移或数据错误。
+- 测试边界：未代替用户再次向 Grok 上传人物参考图；需用户刷新页面后重试一次图片编辑，再根据新日志确认新版镜像是否已修复 Statsig。如果仍返回同一 code 7，应向 Grok2API 上游提交缺陷或从最新源码构建补丁镜像。
+- Workbench：代码和版本保持 1.0.17，本次只更新 Grok2API 基础服务。
