@@ -454,3 +454,14 @@ docker logs --tail 20 grok-workbench-web
 - 预期版本：全仓统一 `1.0.17`。
 - 范围：`packages/core` 去重媒体结果；Web/移动端为编辑请求增加仅修改指定区域的约束；重新发布 Web 并构建 Android/iOS。
 - 风险：上游模型仍可能存在编辑漂移，需真实图片编辑请求验证；iOS 产物仍为未签名 IPA。
+
+### 2026-09-01：修复图片编辑跑题与重复结果（已完成）
+
+- 状态：已完成。
+- 版本：全仓统一 `1.0.17`。
+- 修复：编辑请求会自动附加“只修改指定区域、保持人物/姿势/场景/构图不变”的强约束；共享媒体解析按资产 ID/URL/Base64 去重，避免同一返回图重复展示两次。
+- 本地验证：`npm run build:web` 通过；在 `apps/mobile` 目录执行 Android 与 iOS Expo export 均通过。此前从仓库根目录直接执行 Expo 导致入口解析失败，确认属于执行目录问题而非代码问题。
+- Web：已从 `/opt/grok-workbench/apps/web` 构建并部署，镜像 `sha256:4f451f8a112a54dbff9e52d800e9ace581f5c2a076893fb570b2b408d2eea2a0`；首页及 `/auth/me` 均返回 200；回滚标签 `web-grok-workbench-web:1.0.16-before-edit-fidelity`，源码备份 `/opt/grok-workbench/backups/1.0.16-before-edit-fidelity-20260901/`。
+- Android：run `33466218580` 成功，Release `v1.0.17`，APK `GrokWorkbench-v1.0.17.apk`，SHA256 `c7a0d0c1eef1f900a01929b2ace999853a32cabd58d76c68720ccb4c03d4860a`。
+- iOS：run `33466283011` 成功，未签名 IPA `GrokWorkbench-v1.0.17-12-unsigned.ipa`，SHA256 `8fcccb34e8799469b7d6fc68dea4823403107faf31e1ab4d3071cbdf2b8afa4a`。
+- 遗留：该修复能消除请求约束不足和前端重复展示，但无法保证上游模型每次都严格局部编辑；仍需用同一参考图实测。如果结果继续完全无关，应进一步检查 Grok2API 当前 Web 编辑账户/路由是否真的把上传图片传给上游，而不是继续调整提示词。
