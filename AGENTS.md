@@ -384,9 +384,21 @@ docker logs --tail 20 grok-workbench-web
 
 ### 2026-09-01：Android 应用内在线更新（进行中）
 
-- 状态：进行中。
+- 状态：已完成。
 - 目标：让 Android 客户端能够在应用内检查 GitHub Releases 最新版本、查看更新说明、下载并校验 APK，然后调起 Android 系统安装界面；iOS 本轮不接入安装包在线更新。
 - 预期版本：全仓统一 `1.0.15`；属于用户可见功能与发布流程变化，必须增加 patch 版本。
 - 范围：`apps/mobile/App.js`、`apps/mobile/package.json`、`apps/mobile/app.json`、根版本与锁文件、Android GitHub Actions/Release 流程、AGENTS.md；Web 仅同步版本并按标准候选镜像流程部署，不改变业务功能。
 - 发布源：公开仓库 `chenweitian423/grok-workbench-mobile` 的 GitHub Releases；应用通过 Releases API 检查版本，APK 从 Release Assets 下载，不依赖会过期的 Actions artifact。
 - 风险：必须确认当前已安装 APK 与新构建 APK 使用同一签名证书；如果现有流水线使用不可复现的临时签名，用户需要最后手动安装一次使用固定签名的在线更新基础版。Android 不允许普通应用静默安装，下载完成后仍需用户在系统安装界面确认。
+- 完成内容：
+  - Android 启动约 1.8 秒后后台检查 `chenweitian423/grok-workbench-mobile` 的最新 GitHub Release；有新版本时显示更新说明，设置页也提供手动检查。
+  - 使用 `expo-file-system` 下载 APK，展示进度并按 Release asset 字节数校验文件完整性；使用 `expo-intent-launcher` 和 content URI 调起 Android 系统安装界面。
+  - 新增 `android.permission.REQUEST_INSTALL_PACKAGES`；iOS 保持原状，不展示 Android 安装入口。
+  - 移除 App.js 中滞后的独立 `MOBILE_APP_VERSION`，统一读取 core 的 `APP_VERSION`，避免界面版本与安装包版本再次不一致。
+  - Android GitHub Actions 在构建成功后自动创建/更新 `vX.Y.Z` GitHub Release 并上传固定文件名 APK；发布前用 `apksigner` 验证签名，并强制校验证书 SHA256 `fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c`。
+- 签名兼容性：本地重新 prebuild 生成的 debug.keystore 证书、旧 `1.0.14` APK 和新 `1.0.15` APK 的证书 SHA256 完全一致；新包可覆盖旧包。当前证书为标准 Android Debug 证书，有效期至 2052 年，后续流水线一旦证书漂移会在发布前失败。
+- 验证：本地 `npm run build:web` 通过（1577 模块）；`npx expo export --platform android` 通过（592 模块）；Expo 配置确认 version `1.0.15`、versionCode `10015` 与安装权限生效；prebuild AndroidManifest 与 Gradle 签名配置核对通过。
+- CI 与 Release：提交 `fcbe19c` 实现功能，提交 `abb451e` 修正不同 build-tools 版本的证书输出解析；Android run `33461073649` 成功并创建公开 Release `v1.0.15`。Release APK 为 `GrokWorkbench-v1.0.15.apk`，大小 65,577,638 字节，SHA256 `c51154195036dcebe479870572c74415f47a0045aa54700018ceb86eaf15c6d2`，包含 3 个 dex 与 60 个原生库，APK v2 签名验证通过；本地保存于 `dist-android/GrokWorkbench-v1.0.15.apk`，旧 `1.0.14-12` 已移入 `dist-android/旧版本/`。
+- Web 部署：全仓版本统一为 `1.0.15`；服务器正确源码 `/opt/grok-workbench` 已同步并校验。候选镜像 `sha256:525bca02661f49d0baf85164e7100a96d9c9e3480d75083aa09a386a9e44daec` 在 38697 验证首页 200、`/auth/me` 200、匿名 `/library` 401、版本及音乐/语音/参考图/视频请求预览/聊天图片功能标记齐全后正式上线；数据卷保持 `web_grok-workbench-data:/app/data` 与只读 `grok2api_grok2api-data:/grok2api-data`。
+- 回滚点：镜像标签 `web-grok-workbench-web:1.0.14-before-android-online-update`，镜像 `sha256:dcbe2acb1aacc2242692deafe1600600b8c0bcec9c04be273478d823d4383fc4`；源码备份 `/opt/grok-workbench/backups/1.0.14-before-android-online-update-20260901/source-files.tar`。
+- 使用边界：`1.0.14` 本身没有更新代码，因此用户需要手动覆盖安装一次 `1.0.15`；从后续 `1.0.16` 开始可在 App 内检查、下载并调起安装。普通 Android 应用不能静默完成安装，系统确认步骤仍由用户操作；真实设备上的完整下载和系统安装流程仍需安装 `1.0.15` 后实测。
